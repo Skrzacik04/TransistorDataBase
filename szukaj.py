@@ -153,8 +153,9 @@ def print_help():
 │   compare     – overlay chart data from multiple transistors     │
 │   create      – create a new blank record (opens editor)         │
 │   edit        – open an existing record in the system editor     │
-│   import      – import PDF / JSON / PLECS XML files              │
+│   import      – import PDF / JSON / PLECS XML files             │
 │   export      – export results: JSON / CSV / PLECS XML           │
+│   converter   – run converter loss-map analysis (boost/buck/buck-boost)  │
 │   exit        – quit the application                             │
 ├──────────────────────────────────────────────────────────────────┤
 │ SEARCH  (Text fields are matched partially & case-insensitive!): │
@@ -182,34 +183,20 @@ def print_help():
 # QUERY PREPROCESSOR (Text Fuzzy Matching)
 # ---------------------------------------------------------------------------
 
-def preprocess_query(q, df_columns):
+def preprocess_query(q):
     """
     Translates basic == and != string comparisons into pandas substring checks
     so the user doesn't have to type the exact full name (case-insensitive).
-    Also corrects the case of parameter names automatically.
     """
-    # 1. Tworzymy słownik mapujący małe litery na oryginalną wielkość liter kolumn
-    col_map = {str(c).lower(): str(c) for c in df_columns}
-
-    def fix_case(match):
-        word = match.group(0)
-        # Zamień na oryginalną nazwę kolumny, a jeśli to np. 'and', zostaw bez zmian
-        return col_map.get(word.lower(), word)
-
-    # 2. Dzielimy zapytanie tak, aby omijać wartości w cudzysłowach ('...' lub "...")
-    parts = re.split(r'("[^"]*"|\'[^\']*\')', q)
-    for i in range(0, len(parts), 2): # Indeksy parzyste to tekst *poza* cudzysłowami
-        parts[i] = re.sub(r'\b[a-zA-Z_][a-zA-Z0-9_]*\b', fix_case, parts[i])
-    q = "".join(parts)
-
-    # 3. Convert: col == 'val'  ->  col.str.contains('val', case=False, na=False)
+    # Convert: col == 'val'  ->  col.str.contains('val', case=False, na=False)
     q = re.sub(r"([a-zA-Z0-9_]+)\s*==\s*(['\"])(.*?)\2",
                r"\1.str.contains(\2\3\2, case=False, na=False)", q)
 
-    # 4. Convert: col != 'val'  ->  (~ col.str.contains('val', case=False, na=False))
+    # Convert: col != 'val'  ->  (~ col.str.contains('val', case=False, na=False))
     q = re.sub(r"([a-zA-Z0-9_]+)\s*!=\s*(['\"])(.*?)\2",
                r"(~ \1.str.contains(\2\3\2, case=False, na=False))", q)
     return q
+
 
 # ---------------------------------------------------------------------------
 # DATABASE LOADER
@@ -1144,6 +1131,494 @@ def compare_transistor_charts(df, preselected_names=None):
 
 
 # ---------------------------------------------------------------------------
+# PLOTTING
+# ---------------------------------------------------------------------------
+
+def _get_plot_colors():
+    """Return a list of distinct colors for multi-curve plots."""
+    return ['#1f77b4', '#d62728', '#2ca02c', '#ff7f0e',
+            '#9467bd', '#8c564b', '#e377c2', '#17becf',
+            '#bcbd22', '#7f7f7f']
+
+
+def plot_transistor(json_path: str) -> None:
+    """
+    Plot all available characteristics for a transistor JSON file,
+    mirroring the chart set from the reference transistordatabase library:
+
+      1. Switch Channel I-V  (graph_v_i, grouped by v_g or t_j)
+      2. Switch E_on/E_off   vs Current  (graph_i_e)
+      3. Switch E_on/E_off   vs Gate Resistor (graph_r_e)
+      4. Switch E_on/E_off   vs Temperature   (graph_t_e)
+      5. Switch On-resistance vs Temperature  (r_channel_th)
+      6. Switch Gate Charge   (charge_curve)
+      7. Switch SOA
+      8. Diode Channel I-V
+      9. Diode E_rr          vs Current  (graph_i_e)
+     10. Diode E_rr          vs Gate Resistor (graph_r_e)
+     11. Diode SOA
+     12. C_iss / C_oss / C_rss vs Voltage
+     13. V_E_oss  (graph_v_ecoss)
+     14. Thermal Foster: Rth(t) transient – switch & diode
+
+    Each chart type opens in its own figure window.
+    Windows that have no data are silently skipped.
+
+    :param json_path: Path to the transistor JSON file.
+    """
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib
+        matplotlib.use('TkAgg' if 'TkAgg' in matplotlib.rcsetup.all_backends else 'Agg')
+    except ImportError:
+        print("[ERROR] matplotlib is not installed. Run: pip install matplotlib")
+        return
+
+    try:
+        with open(json_path, "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+    except Exception as e:
+        print(f"[ERROR] Cannot read JSON file: {e}")
+        return
+
+    name = d.get("name", "Unknown")
+    sw   = d.get("switch", {})
+    di   = d.get("diode",  {})
+    colors = _get_plot_colors()
+    plots_shown = 0
+
+    # ------------------------------------------------------------------
+    # Helper: safe list check
+    # ------------------------------------------------------------------
+    def _valid_list(obj):
+        return isinstance(obj, list) and len(obj) > 0
+
+    def _valid_curve(lst, key):
+        """Return entries from lst that have a non-empty list at lst[key]."""
+        return [e for e in lst
+                if isinstance(e, dict)
+                and _valid_list(e.get(key))
+                and len(e[key]) == 2
+                and _valid_list(e[key][0])]
+
+    # ------------------------------------------------------------------
+    # 1. Switch Channel I-V
+    # ------------------------------------------------------------------
+    sw_ch = [c for c in sw.get("channel", [])
+             if isinstance(c, dict) and _valid_list(c.get("graph_v_i"))
+             and len(c["graph_v_i"]) == 2 and _valid_list(c["graph_v_i"][0])]
+
+    if sw_ch:
+        # Group: if many curves per v_g -> plot by t_j per v_g;
+        #        if many curves per t_j -> plot by v_g per t_j  (same logic as reference)
+        by_tj  = {}
+        by_vg  = {}
+        for c in sw_ch:
+            by_tj.setdefault(c.get("t_j"), []).append(c)
+            by_vg.setdefault(c.get("v_g"), []).append(c)
+
+        multi_per_tj = any(len(v) > 1 for v in by_tj.values())
+        multi_per_vg = any(len(v) > 1 for v in by_vg.values())
+
+        if multi_per_tj:
+            # One figure per t_j, curves labelled by v_g
+            for tj, curves in sorted(by_tj.items()):
+                if len(curves) <= 1:
+                    continue
+                fig, ax = plt.subplots()
+                for i, c in enumerate(curves):
+                    ax.plot(c["graph_v_i"][0], c["graph_v_i"][1],
+                            color=colors[i % len(colors)],
+                            label=f"$V_g$ = {c.get('v_g')} V")
+                ax.set_title(f"{name} – Switch Channel  ($T_j$ = {tj} °C)")
+                ax.set_xlabel("Voltage in V")
+                ax.set_ylabel("Current in A")
+                ax.legend(fontsize=8)
+                ax.grid(True)
+                plt.tight_layout()
+                plots_shown += 1
+
+        if multi_per_vg:
+            # One figure per v_g, curves labelled by t_j
+            for vg, curves in sorted(by_vg.items(), key=lambda x: (x[0] is None, x[0])):
+                if len(curves) <= 1 and multi_per_tj:
+                    continue
+                fig, ax = plt.subplots()
+                for i, c in enumerate(curves):
+                    ax.plot(c["graph_v_i"][0], c["graph_v_i"][1],
+                            color=colors[i % len(colors)],
+                            label=f"$T_j$ = {c.get('t_j')} °C")
+                ax.set_title(f"{name} – Switch Channel  ($V_g$ = {vg} V)")
+                ax.set_xlabel("Voltage in V")
+                ax.set_ylabel("Current in A")
+                ax.legend(fontsize=8)
+                ax.grid(True)
+                plt.tight_layout()
+                plots_shown += 1
+
+        if not multi_per_tj and not multi_per_vg:
+            # Few curves – all on one figure
+            fig, ax = plt.subplots()
+            for i, c in enumerate(sw_ch):
+                ax.plot(c["graph_v_i"][0], c["graph_v_i"][1],
+                        color=colors[i % len(colors)],
+                        label=f"$V_g$ = {c.get('v_g')} V,  $T_j$ = {c.get('t_j')} °C")
+            ax.set_title(f"{name} – Switch Channel I-V")
+            ax.set_xlabel("Voltage in V")
+            ax.set_ylabel("Current in A")
+            ax.legend(fontsize=8)
+            ax.grid(True)
+            plt.tight_layout()
+            plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 2. Switch E_on / E_off  vs  Current  (graph_i_e)
+    # ------------------------------------------------------------------
+    eon_ie  = _valid_curve(sw.get("e_on",  []), "graph_i_e")
+    eoff_ie = _valid_curve(sw.get("e_off", []), "graph_i_e")
+
+    if eon_ie or eoff_ie:
+        fig, ax = plt.subplots()
+        for i, e in enumerate(eon_ie):
+            lbl = (f"$E_{{on}}$: $V_{{supply}}$={e.get('v_supply')} V, "
+                   f"$V_g$={e.get('v_g')} V, $T_j$={e.get('t_j')} °C, "
+                   f"$R_g$={e.get('r_g')} Ω")
+            ax.plot(e["graph_i_e"][0], e["graph_i_e"][1],
+                    color=colors[i % len(colors)], label=lbl)
+        for i, e in enumerate(eoff_ie):
+            lbl = (f"$E_{{off}}$: $V_{{supply}}$={e.get('v_supply')} V, "
+                   f"$V_g$={e.get('v_g')} V, $T_j$={e.get('t_j')} °C, "
+                   f"$R_g$={e.get('r_g')} Ω")
+            ax.plot(e["graph_i_e"][0], e["graph_i_e"][1],
+                    color=colors[(i + len(eon_ie)) % len(colors)],
+                    linestyle='--', label=lbl)
+        ax.set_title(f"{name} – Switch Switching Losses vs Current")
+        ax.set_xlabel("Current in A")
+        ax.set_ylabel("Loss energy in J")
+        ax.ticklabel_format(axis='y', style='sci', scilimits=(0, 0))
+        ax.legend(fontsize=6)
+        ax.grid(True)
+        plt.tight_layout()
+        plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 3. Switch E_on / E_off  vs  Gate Resistor  (graph_r_e)
+    # ------------------------------------------------------------------
+    eon_re  = _valid_curve(sw.get("e_on",  []), "graph_r_e")
+    eoff_re = _valid_curve(sw.get("e_off", []), "graph_r_e")
+
+    if eon_re or eoff_re:
+        fig, ax = plt.subplots()
+        for i, e in enumerate(eon_re):
+            lbl = (f"$E_{{on}}$: $V_{{supply}}$={e.get('v_supply')} V, "
+                   f"$V_g$={e.get('v_g')} V, $T_j$={e.get('t_j')} °C, "
+                   f"$I_{{ch}}$={e.get('i_x')} A")
+            ax.plot(e["graph_r_e"][0], e["graph_r_e"][1],
+                    color=colors[i % len(colors)], label=lbl)
+        for i, e in enumerate(eoff_re):
+            lbl = (f"$E_{{off}}$: $V_{{supply}}$={e.get('v_supply')} V, "
+                   f"$V_g$={e.get('v_g')} V, $T_j$={e.get('t_j')} °C, "
+                   f"$I_{{ch}}$={e.get('i_x')} A")
+            ax.plot(e["graph_r_e"][0], e["graph_r_e"][1],
+                    color=colors[(i + len(eon_re)) % len(colors)],
+                    linestyle='--', label=lbl)
+        ax.set_title(f"{name} – Switch Switching Losses vs Gate Resistor")
+        ax.set_xlabel("External Gate Resistor in Ω")
+        ax.set_ylabel("Loss energy in J")
+        ax.ticklabel_format(axis='y', style='sci', scilimits=(0, 0))
+        ax.legend(fontsize=6)
+        ax.grid(True)
+        plt.tight_layout()
+        plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 4. Switch E_on / E_off  vs  Temperature  (graph_t_e)
+    # ------------------------------------------------------------------
+    eon_te  = _valid_curve(sw.get("e_on",  []), "graph_t_e")
+    eoff_te = _valid_curve(sw.get("e_off", []), "graph_t_e")
+
+    if eon_te or eoff_te:
+        fig, ax = plt.subplots()
+        for i, e in enumerate(eon_te):
+            lbl = (f"$E_{{on}}$: $V_{{supply}}$={e.get('v_supply')} V, "
+                   f"$V_g$={e.get('v_g')} V, $R_g$={e.get('r_g')} Ω, "
+                   f"$I_{{ch}}$={e.get('i_x')} A")
+            ax.plot(e["graph_t_e"][0], e["graph_t_e"][1],
+                    color=colors[i % len(colors)], label=lbl)
+        for i, e in enumerate(eoff_te):
+            lbl = (f"$E_{{off}}$: $V_{{supply}}$={e.get('v_supply')} V, "
+                   f"$V_g$={e.get('v_g')} V, $R_g$={e.get('r_g')} Ω, "
+                   f"$I_{{ch}}$={e.get('i_x')} A")
+            ax.plot(e["graph_t_e"][0], e["graph_t_e"][1],
+                    color=colors[(i + len(eon_te)) % len(colors)],
+                    linestyle='--', label=lbl)
+        ax.set_title(f"{name} – Switch Switching Losses vs Junction Temperature")
+        ax.set_xlabel("Junction Temperature in °C")
+        ax.set_ylabel("Loss energy in J")
+        ax.ticklabel_format(axis='y', style='sci', scilimits=(0, 0))
+        ax.legend(fontsize=6)
+        ax.grid(True)
+        plt.tight_layout()
+        plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 5. Switch On-resistance vs Temperature  (r_channel_th)
+    # ------------------------------------------------------------------
+    r_th_list = [e for e in sw.get("r_channel_th", [])
+                 if isinstance(e, dict)]
+    # dataset_type = 't_r': graph axes are [T_j, R_on]
+    # dataset_type = 't_r_norm': same but normalised
+    tr_curves = [e for e in r_th_list
+                 if e.get("dataset_type") in ("t_r", "t_r_norm")
+                 and _valid_list(e.get("graph_t_r"))
+                 and len(e["graph_t_r"]) == 2]
+    if tr_curves:
+        fig, ax = plt.subplots()
+        ylabel = ("On-resistance (normalised)" if tr_curves[0].get("dataset_type") == "t_r_norm"
+                  else "On-resistance in Ω")
+        for i, e in enumerate(tr_curves):
+            lbl = (f"$V_g$={e.get('v_g')} V,  $I_{{ch}}$={e.get('i_channel')} A")
+            ax.plot(e["graph_t_r"][0], e["graph_t_r"][1],
+                    color=colors[i % len(colors)], label=lbl)
+        ax.set_title(f"{name} – Switch On-resistance vs Temperature")
+        ax.set_xlabel("Junction Temperature in °C")
+        ax.set_ylabel(ylabel)
+        ax.legend(fontsize=8)
+        ax.grid(True)
+        plt.tight_layout()
+        plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 6. Switch Gate Charge  (charge_curve)
+    # ------------------------------------------------------------------
+    qg_curves = [e for e in sw.get("charge_curve", [])
+                 if isinstance(e, dict)
+                 and _valid_list(e.get("graph_q_v"))
+                 and len(e["graph_q_v"]) == 2]
+    if qg_curves:
+        fig, ax = plt.subplots()
+        for i, e in enumerate(qg_curves):
+            lbl = (f"$I_{{ch}}$={e.get('i_channel')} A, "
+                   f"$V_{{supply}}$={e.get('v_supply')} V, "
+                   f"$T_j$={e.get('t_j')} °C")
+            ax.plot(e["graph_q_v"][0], e["graph_q_v"][1],
+                    color=colors[i % len(colors)], label=lbl)
+        ax.set_title(f"{name} – Switch Gate Charge")
+        ax.set_xlabel("Gate Charge $Q_G$ in nC")
+        ax.set_ylabel("Gate-source Voltage $V_{gs}$ in V")
+        ax.legend(fontsize=8)
+        ax.grid(True)
+        plt.tight_layout()
+        plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 7. Switch SOA
+    # ------------------------------------------------------------------
+    sw_soa = [e for e in sw.get("soa", [])
+              if isinstance(e, dict)
+              and _valid_list(e.get("graph_i_v"))
+              and len(e["graph_i_v"]) == 2]
+    if sw_soa:
+        fig, ax = plt.subplots()
+        for i, e in enumerate(sw_soa):
+            lbl = f"$T_c$ = {e.get('t_c')} °C"
+            ax.loglog(e["graph_i_v"][0], e["graph_i_v"][1],
+                      color=colors[i % len(colors)], label=lbl)
+        ax.set_title(f"{name} – Switch Safe Operating Area")
+        ax.set_xlabel("$V_{ds}$ / $V_{ce}$ in V")
+        ax.set_ylabel("$I_d$ / $I_c$ in A")
+        ax.legend(fontsize=8)
+        ax.grid(True, which='both')
+        plt.tight_layout()
+        plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 8. Diode Channel I-V
+    # ------------------------------------------------------------------
+    di_ch = [c for c in di.get("channel", [])
+             if isinstance(c, dict) and _valid_list(c.get("graph_v_i"))
+             and len(c["graph_v_i"]) == 2 and _valid_list(c["graph_v_i"][0])]
+
+    if di_ch:
+        by_tj_d = {}
+        by_vg_d = {}
+        for c in di_ch:
+            by_tj_d.setdefault(c.get("t_j"), []).append(c)
+            by_vg_d.setdefault(c.get("v_g"), []).append(c)
+
+        multi_per_tj_d = any(len(v) > 1 for v in by_tj_d.values())
+
+        if multi_per_tj_d:
+            for tj, curves in sorted(by_tj_d.items()):
+                if len(curves) <= 1:
+                    continue
+                fig, ax = plt.subplots()
+                for i, c in enumerate(curves):
+                    ax.plot(c["graph_v_i"][0], c["graph_v_i"][1],
+                            color=colors[i % len(colors)],
+                            label=f"$V_g$ = {c.get('v_g')} V")
+                ax.set_title(f"{name} – Diode Channel  ($T_j$ = {tj} °C)")
+                ax.set_xlabel("Voltage in V")
+                ax.set_ylabel("Current in A")
+                ax.legend(fontsize=8)
+                ax.grid(True)
+                plt.tight_layout()
+                plots_shown += 1
+        else:
+            fig, ax = plt.subplots()
+            for i, c in enumerate(di_ch):
+                ax.plot(c["graph_v_i"][0], c["graph_v_i"][1],
+                        color=colors[i % len(colors)],
+                        label=f"$T_j$ = {c.get('t_j')} °C")
+            ax.set_title(f"{name} – Diode Channel I-V")
+            ax.set_xlabel("Voltage in V")
+            ax.set_ylabel("Current in A")
+            ax.legend(fontsize=8)
+            ax.grid(True)
+            plt.tight_layout()
+            plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 9. Diode E_rr  vs  Current  (graph_i_e)
+    # ------------------------------------------------------------------
+    err_ie = _valid_curve(di.get("e_rr", []), "graph_i_e")
+    if err_ie:
+        fig, ax = plt.subplots()
+        for i, e in enumerate(err_ie):
+            lbl = (f"$E_{{rr}}$: $V_{{supply}}$={e.get('v_supply')} V, "
+                   f"$T_j$={e.get('t_j')} °C, $R_g$={e.get('r_g')} Ω")
+            if isinstance(e.get("v_g"), (int, float)):
+                lbl += f", $V_g$={e['v_g']} V"
+            ax.plot(e["graph_i_e"][0], e["graph_i_e"][1],
+                    color=colors[i % len(colors)], label=lbl)
+        ax.set_title(f"{name} – Diode Reverse Recovery Energy vs Current")
+        ax.set_xlabel("Current in A")
+        ax.set_ylabel("Loss energy in J")
+        ax.ticklabel_format(axis='y', style='sci', scilimits=(0, 0))
+        ax.legend(fontsize=6)
+        ax.grid(True)
+        plt.tight_layout()
+        plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 10. Diode E_rr  vs  Gate Resistor  (graph_r_e)
+    # ------------------------------------------------------------------
+    err_re = _valid_curve(di.get("e_rr", []), "graph_r_e")
+    if err_re:
+        fig, ax = plt.subplots()
+        for i, e in enumerate(err_re):
+            lbl = (f"$E_{{rr}}$: $V_{{supply}}$={e.get('v_supply')} V, "
+                   f"$T_j$={e.get('t_j')} °C, $I_{{ch}}$={e.get('i_x')} A")
+            if isinstance(e.get("v_g"), (int, float)):
+                lbl += f", $V_g$={e['v_g']} V"
+            ax.plot(e["graph_r_e"][0], e["graph_r_e"][1],
+                    color=colors[i % len(colors)], label=lbl)
+        ax.set_title(f"{name} – Diode Reverse Recovery Energy vs Gate Resistor")
+        ax.set_xlabel("External Gate Resistor in Ω")
+        ax.set_ylabel("Loss energy in J")
+        ax.ticklabel_format(axis='y', style='sci', scilimits=(0, 0))
+        ax.legend(fontsize=6)
+        ax.grid(True)
+        plt.tight_layout()
+        plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 11. Diode SOA
+    # ------------------------------------------------------------------
+    di_soa = [e for e in di.get("soa", [])
+              if isinstance(e, dict)
+              and _valid_list(e.get("graph_i_v"))
+              and len(e["graph_i_v"]) == 2]
+    if di_soa:
+        fig, ax = plt.subplots()
+        for i, e in enumerate(di_soa):
+            ax.loglog(e["graph_i_v"][0], e["graph_i_v"][1],
+                      color=colors[i % len(colors)],
+                      label=f"$T_c$ = {e.get('t_c')} °C")
+        ax.set_title(f"{name} – Diode Safe Operating Area")
+        ax.set_xlabel("$V_r$ in V")
+        ax.set_ylabel("$I_r$ in A")
+        ax.legend(fontsize=8)
+        ax.grid(True, which='both')
+        plt.tight_layout()
+        plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 12. C_iss / C_oss / C_rss  vs  Voltage
+    # ------------------------------------------------------------------
+    cap_curves = {}
+    for cap_key, label in [("c_iss", "$C_{iss}$"), ("c_oss", "$C_{oss}$"), ("c_rss", "$C_{rss}$")]:
+        entries = d.get(cap_key)
+        if not _valid_list(entries):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and _valid_list(entry.get("graph_v_c")) and len(entry["graph_v_c"]) == 2:
+                cap_curves.setdefault(cap_key, []).append((label, entry["graph_v_c"]))
+
+    if cap_curves:
+        fig, ax = plt.subplots()
+        ci = 0
+        for cap_key, pairs in cap_curves.items():
+            for label, gvc in pairs:
+                ax.semilogy(gvc[0], gvc[1], color=colors[ci % len(colors)], label=label)
+                ci += 1
+        ax.set_title(f"{name} – Parasitic Capacitances vs Voltage")
+        ax.set_xlabel("Voltage in V")
+        ax.set_ylabel("Capacitance in F")
+        ax.legend(fontsize=8)
+        ax.grid(True, which='both')
+        plt.tight_layout()
+        plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 13. V_E_oss  (graph_v_ecoss)
+    # ------------------------------------------------------------------
+    ecoss = d.get("graph_v_ecoss")
+    if _valid_list(ecoss) and len(ecoss) == 2 and _valid_list(ecoss[0]):
+        fig, ax = plt.subplots()
+        ax.plot(ecoss[0], ecoss[1], color=colors[0])
+        ax.set_title(f"{name} – Energy stored in $C_{{oss}}$ vs $V_{{DS}}$")
+        ax.set_xlabel("Voltage in V")
+        ax.set_ylabel("Energy in J")
+        ax.grid(True)
+        plt.tight_layout()
+        plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # 14. Thermal Foster transient  Rth(t)  – switch & diode
+    # ------------------------------------------------------------------
+    for component, tf in [("Switch", sw.get("thermal_foster", {})),
+                           ("Diode",  di.get("thermal_foster",  {}))]:
+        if not isinstance(tf, dict):
+            continue
+        gtr = tf.get("graph_t_rthjc")
+        if _valid_list(gtr) and len(gtr) == 2 and _valid_list(gtr[0]):
+            fig, ax = plt.subplots()
+            ax.semilogx(gtr[0], gtr[1],
+                        color=colors[0] if component == "Switch" else colors[1])
+            ax.set_title(f"{name} – {component} Thermal Impedance $Z_{{th,jc}}(t)$")
+            ax.set_xlabel("Time in s")
+            ax.set_ylabel("$R_{{th}}$ in K/W")
+            ax.grid(True, which='both')
+            plt.tight_layout()
+            plots_shown += 1
+
+    # ------------------------------------------------------------------
+    # Final
+    # ------------------------------------------------------------------
+    if plots_shown == 0:
+        print(f"[INFO] No plottable data found for '{name}'.")
+        return
+
+    print(f"[INFO] Opened {plots_shown} plot window(s) for '{name}'.")
+    try:
+        import matplotlib.pyplot as plt
+        plt.show()
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # PLECS XML EXPORT
 # ---------------------------------------------------------------------------
 
@@ -1820,6 +2295,181 @@ def import_plecs_xml() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# CONVERTER CLI
+# ---------------------------------------------------------------------------
+
+def _run_converter_cli(df):
+    """
+    Interactive CLI wizard for converter loss-map analysis.
+    Calls converters.analysis.run_loss_map and plots results with matplotlib.
+    """
+    # lazy import so szukaj.py still works without the converters package
+    try:
+        import sys, os
+        import numpy as np
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from converters.core import ConverterDevice, ConverterError
+        from converters.analysis import ConverterParams, run_loss_map
+    except ImportError as e:
+        print(f"[ERROR] converters package not found: {e}")
+        print("  Make sure the 'converters/' folder is in the same directory as szukaj.py.")
+        return
+
+    print("""
+┌──────────────────────────────────────────────────────┐
+│          CONVERTER LOSS MAP  –  WIZARD               │
+│  Topologies: boost | buck | buck_boost               │
+└──────────────────────────────────────────────────────┘
+""")
+
+    # ---- topology ----
+    topo = input("Topology [boost]: ").strip().lower() or "boost"
+    if topo not in ("boost", "buck", "buck_boost"):
+        print("[ERROR] Unknown topology. Choose: boost | buck | buck_boost"); return
+
+    # ---- device selection via numbered list ----
+    names = sorted(df["name"].dropna().tolist())
+    for i, n in enumerate(names, 1):
+        print(f"  [{i:>3}] {n}")
+
+    def _pick(label):
+        raw = input(f"\nSelect {label} (number): ").strip()
+        if raw.isdigit() and 1 <= int(raw) <= len(names):
+            name = names[int(raw) - 1]
+            row  = df[df["name"] == name]
+            if row.empty:
+                print(f"[ERROR] '{name}' not found."); return None
+            path = row.iloc[0]["_original_file_path"]
+            try:
+                dev = ConverterDevice(path)
+                print(f"  Loaded: {dev}")
+                return dev
+            except Exception as e:
+                print(f"[ERROR] {e}"); return None
+        print("[ERROR] Invalid selection."); return None
+
+    t1 = _pick("T1 – active switch")
+    if t1 is None: return
+    t2 = _pick("T2 – freewheeling diode / second switch")
+    if t2 is None: return
+
+    # ---- parameters ----
+    def _f(prompt, default):
+        raw = input(f"  {prompt} [{default}]: ").strip()
+        try:    return float(raw) if raw else float(default)
+        except: return float(default)
+
+    def _i(prompt, default):
+        raw = input(f"  {prompt} [{default}]: ").strip()
+        try:    return int(raw) if raw else int(default)
+        except: return int(default)
+
+    print("\n--- Operating parameters (Enter = use default) ---")
+    params = ConverterParams(
+        v_out         = _f("V_out [V]",           400),
+        v_in_range    = (_f("V_in min [V]",        200),
+                         _f("V_in max [V]",        800)),
+        p_out_range   = (_f("P_out min [W]",       500),
+                         _f("P_out max [W]",      10000)),
+        frequency     = _f("Frequency [Hz]",     10000),
+        inductance    = _f("Inductance [H]",      1e-3),
+        v_g_on        = _f("V_g_on [V]",           15),
+        t_heatsink    = _f("T_heatsink [°C]",       50),
+        r_th_heatsink = _f("Rth_heatsink [K/W]",   0.1),
+        n_points      = _i("Grid points",           40),
+    )
+
+    print("\n⏳ Computing loss map…")
+    try:
+        result = run_loss_map(topo, t1, t2, params)
+    except Exception as e:
+        print(f"[ERROR] {e}"); return
+
+    if result.warnings:
+        print("\n⚠ Warnings:")
+        for w in result.warnings:
+            print(f"  {w}")
+
+    # ---- print summary at operating centre ----
+    mid_v = len(result.v_in_vec) // 2
+    mid_p = len(result.p_out_vec) // 2
+    print(f"\n--- Results at V_in={result.v_in_vec[mid_v]:.0f} V, "
+          f"P_out={result.p_out_vec[mid_p]:.0f} W ---")
+    for attr, label in [
+        ("P_cond_T1", "T1 Conduction losses"),
+        ("P_cond_T2", "T2 Conduction losses"),
+        ("P_sw_T1",   "T1 Switching losses "),
+        ("P_rr_T2",   "T2 Rev-recovery     "),
+        ("P_total",   "Total losses        "),
+        ("T_j_T1",    "T1 Junction temp    "),
+        ("T_j_T2",    "T2 Junction temp    "),
+        ("duty",      "Duty cycle          "),
+        ("i_peak",    "Peak current        "),
+    ]:
+        arr = getattr(result, attr)
+        val = arr[mid_p, mid_v]
+        unit = "°C" if "T_j" in attr else ("A" if "peak" in attr else
+               ("-" if "duty" in attr else "W"))
+        print(f"  {label}: {val:.3f} {unit}" if not np.isnan(val)
+              else f"  {label}: N/A")
+
+    # ---- plot ----
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib
+
+        maps_to_plot = [
+            ("P_total",   "Total losses [W]",      "plasma"),
+            ("P_sw_T1",   "T1 Switching losses [W]","hot"),
+            ("T_j_T1",    "T1 Junction temp [°C]", "RdYlGn_r"),
+            ("duty",      "Duty cycle [-]",         "viridis"),
+        ]
+        valid_maps = [(k, l, c) for k, l, c in maps_to_plot
+                      if not np.all(np.isnan(getattr(result, k)))]
+
+        n_plots = len(valid_maps)
+        cols = 2
+        rows = (n_plots + 1) // 2
+        fig, axes = plt.subplots(rows, cols, figsize=(12, 5 * rows))
+        axes = np.array(axes).flatten()
+
+        V, P = np.meshgrid(result.v_in_vec, result.p_out_vec)
+
+        for ax, (key, label, cmap) in zip(axes, valid_maps):
+            data = np.ma.masked_invalid(getattr(result, key))
+            pc = ax.pcolormesh(V, P, data, shading="auto", cmap=cmap)
+            fig.colorbar(pc, ax=ax, fraction=0.046, pad=0.04).set_label(label, fontsize=8)
+            try:
+                levels = np.linspace(np.nanmin(data), np.nanmax(data), 7)
+                cs = ax.contour(V, P, data, levels=levels,
+                                colors="white", linewidths=0.5, alpha=0.6)
+                ax.clabel(cs, fmt="%.1f", fontsize=7, inline=True)
+            except Exception:
+                pass
+            ax.set_xlabel("V_in [V]", fontsize=8)
+            ax.set_ylabel("P_out [W]", fontsize=8)
+            ax.set_title(label, fontsize=9)
+
+        # hide unused axes
+        for ax in axes[n_plots:]:
+            ax.set_visible(False)
+
+        topo_label = {"boost": "Boost", "buck": "Buck",
+                      "buck_boost": "Buck-Boost"}.get(topo, topo)
+        fig.suptitle(f"{topo_label} Converter Loss Map\n"
+                     f"T1: {result.t1_name}   |   T2: {result.t2_name}",
+                     fontsize=11, fontweight="bold")
+        plt.tight_layout()
+        plt.show()
+
+    except ImportError:
+        print("[INFO] matplotlib not installed – skipping plots.")
+        print("       Run: pip install matplotlib")
+
+    print("[DONE] Converter analysis complete.\n")
+
+
+# ---------------------------------------------------------------------------
 # INTERACTIVE SEARCH LOOP
 # ---------------------------------------------------------------------------
 
@@ -1967,8 +2617,12 @@ def interactive_search(df):
                 print("Search for something first!\n")
             continue
 
+        if q_lower == 'converter':
+            _run_converter_cli(current_df)
+            continue
+
         try:
-            processed_query = preprocess_query(query, current_df.columns)
+            processed_query = preprocess_query(query)
             results = current_df.query(processed_query, engine='python')
 
             if results.empty:
@@ -2046,7 +2700,7 @@ if __name__ == "__main__":
     if args.query:
         # Tryb jednorazowy CLI
         try:
-            processed_query = preprocess_query(args.query, database_df.columns)
+            processed_query = preprocess_query(args.query)
             results = database_df.query(processed_query, engine='python')
 
             if results.empty:
