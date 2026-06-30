@@ -1,5 +1,6 @@
 """
-gui.py – Graphical user interface for szukaj.py All data operations are delegated to functions from szukaj.py.
+gui.py – Graficzna nakładka na szukaj.py
+Wszystkie operacje na danych delegowane są do funkcji z szukaj.py.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -14,7 +15,7 @@ from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------------------------
-# Import szukaj.py from the same directory (regardless of cwd)
+# Import szukaj.py z tego samego katalogu (bez względu na cwd)
 # ---------------------------------------------------------------------------
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -22,19 +23,30 @@ spec = importlib.util.spec_from_file_location("szukaj", os.path.join(_THIS_DIR, 
 _szukaj = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_szukaj)
 
-# All functions and constants from szukaj
+# Wszystkie funkcje i stałe ze szukaj
 load_full_database          = _szukaj.load_full_database
 preprocess_query            = _szukaj.preprocess_query
 export_folder_structure     = _szukaj.export_folder_structure
 export_plecs_xml            = _szukaj.export_plecs_xml
-import_plecs_xml_func       = _szukaj.import_plecs_xml   # Imported under a different name to avoid collision
+import_plecs_xml_func       = _szukaj.import_plecs_xml   # importujemy pod inną nazwą by nie kolidować
 import_ready_json_file      = _szukaj.import_ready_json_file
 deep_search_charts          = _szukaj.deep_search_charts
 build_structured_json       = _szukaj.build_structured_json
 FIELD_META                  = _szukaj.FIELD_META
 
 # ---------------------------------------------------------------------------
-# Colors and UI constants
+# Converters package (optional – graceful fallback if folder missing)
+# ---------------------------------------------------------------------------
+try:
+    import sys as _sys
+    _sys.path.insert(0, _THIS_DIR)
+    from converters.gui_tab import ConverterTab
+    _CONVERTERS_AVAILABLE = True
+except ImportError:
+    _CONVERTERS_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
+# Kolory i stałe UI
 # ---------------------------------------------------------------------------
 CLR_HDR   = "#2c3e50"
 CLR_BTN   = "#2980b9"
@@ -47,11 +59,11 @@ CLR_RED   = "#c0392b"
 TECH_CATEGORIES = ["GaN", "IGBT", "SiC-MOSFET", "Si-MOSFET"]
 
 # ---------------------------------------------------------------------------
-# Mapping plot key names to physical axis labels
-# Key is a path name fragment (substring), value is (xlabel, ylabel)
+# Mapowanie nazw kluczy wykresów na etykiety osi fizycznych
+# Klucz to fragment nazwy ścieżki (podciąg), wartość to (xlabel, ylabel)
 # ---------------------------------------------------------------------------
 _CHART_AXIS_MAP = [
-    # Voltage vs. Forward Current
+    # napięcie - prąd przewodzenia
     ("graph_v_i",       "V [V]",        "I [A]"),
     ("graph_i_v",       "I [A]",        "V [V]"),
     # energia przełączania vs prąd
@@ -59,24 +71,24 @@ _CHART_AXIS_MAP = [
     ("e_on",            "I [A]",        "E_on [J]"),
     ("e_off",           "I [A]",        "E_off [J]"),
     ("e_rr",            "I [A]",        "E_rr [J]"),
-    # Capacitance vs. Voltage
+    # pojemności vs napięcie
     ("c_iss",           "V_DS [V]",     "C_iss [F]"),
     ("c_oss",           "V_DS [V]",     "C_oss [F]"),
     ("c_rss",           "V_DS [V]",     "C_rss [F]"),
-    # energy in C_oss vs Voltage
+    # energia w C_oss vs napięcie
     ("v_ecoss",         "V_DS [V]",     "E_oss [J]"),
-    # gate charge
+    # ładunek bramki
     ("charge",          "Q_g [C]",      "V_GS [V]"),
     # SOA
     ("soa",             "V [V]",        "I [A]"),
-    # thermal Foster
+    # termiczne Foster
     ("thermal",         "t [s]",        "Z_th [K/W]"),
     # linearized
     ("linearized",      "I [A]",        "V [V]"),
 ]
 
 def _get_axis_labels(chart_key: str):
-    """Returns (xlabel, ylabel) based on the plot key name."""
+    """Zwraca (xlabel, ylabel) na podstawie nazwy klucza wykresu."""
     key_lower = chart_key.lower()
     for fragment, xl, yl in _CHART_AXIS_MAP:
         if fragment in key_lower:
@@ -84,7 +96,7 @@ def _get_axis_labels(chart_key: str):
     return "X", "Y"
 
 # ============================================================================
-# HELPER: Detecting fields with curves
+# HELPER: wykrywanie pól z krzywymi
 # ============================================================================
 def is_curve_field(fn):
     return (fn.startswith("graph_") or fn.startswith("diode_") or
@@ -94,7 +106,7 @@ def is_curve_field(fn):
         and "technology" not in fn and "t_j_max" not in fn
 
 # ============================================================================
-# HELPER: Load JSON directly
+# HELPER: wczytaj JSON bezpośrednio
 # ============================================================================
 def load_json_for_name(name: str, df: pd.DataFrame):
     """Zwraca (dict, path) lub (None, None). Szuka w df, potem przez os.walk."""
@@ -130,7 +142,7 @@ def load_json_for_name(name: str, df: pd.DataFrame):
     return None, None
 
 # ============================================================================
-# POPUP: Enlarged plot with coordinate tooltip and physical axis labels
+# POPUP: powiększony wykres z tooltipem współrzędnych i fizycznymi etykietami osi
 # ============================================================================
 def open_chart_popup(parent, title, curves, chart_key=""):
     xl, yl = _get_axis_labels(chart_key or title)
@@ -154,7 +166,7 @@ def open_chart_popup(parent, title, curves, chart_key=""):
     cv.get_tk_widget().pack(fill="both", expand=True)
     NavigationToolbar2Tk(cv, win).update()
 
-    # --- Coordinate tooltip ---
+    # --- tooltip ze współrzędnymi ---
     annot = ax.annotate("", xy=(0,0), xytext=(12,12), textcoords="offset points",
                         bbox=dict(boxstyle="round,pad=0.4", fc="#ffffcc", ec="#888", alpha=0.9),
                         fontsize=8, visible=False)
@@ -179,7 +191,7 @@ def open_chart_popup(parent, title, curves, chart_key=""):
     win.protocol("WM_DELETE_WINDOW", lambda: (plt.close(fig), win.destroy()))
 
 # ============================================================================
-# MAIN GUI CLASS
+# GŁÓWNA KLASA GUI
 # ============================================================================
 class TransistorGUI:
     def __init__(self, root):
@@ -193,7 +205,7 @@ class TransistorGUI:
         self._build_ui()
 
     # ------------------------------------------------------------------
-    # UI CONSTRUCTION
+    # BUDOWA UI
     # ------------------------------------------------------------------
     def _build_ui(self):
         # Status bar FIRST – must exist before any _build_* method tries to use it
@@ -213,6 +225,7 @@ class TransistorGUI:
             ("tab_edit",     " ✏️  Edit "),
             ("tab_import",   " 📥 Import "),
             ("tab_export",   " 📤 Export "),
+            ("tab_converter"," ⚡ Converters "),
         ]
         for attr, label in tabs:
             f = ttk.Frame(self.nb)
@@ -227,6 +240,7 @@ class TransistorGUI:
         self._build_edit()
         self._build_import()
         self._build_export()
+        self._build_converter()
 
     # ==================================================================
     # BROWSER TAB
@@ -468,6 +482,37 @@ class TransistorGUI:
         self._fill_browser(self.df)
         self._refresh_dropdowns()
         self.status.config(text=f"Reloaded. {len(self.df)} transistors.")
+        # notify converter tab so device dropdowns stay current
+        if _CONVERTERS_AVAILABLE and hasattr(self, "_converter_tab"):
+            self._converter_tab.update_df(self.df)
+
+    def _build_converter(self):
+        """Build the ⚡ Converters tab using ConverterTab from converters/gui_tab.py."""
+        p = self.tab_converter
+        p.columnconfigure(0, weight=1)
+        p.rowconfigure(0, weight=1)
+
+        if not _CONVERTERS_AVAILABLE:
+            msg = (
+                "The 'converters/' package was not found.\n\n"
+                "Make sure the converters/ folder is in the same directory as GUI.py:\n\n"
+                "  szukaj/\n"
+                "  ├── GUI.py\n"
+                "  ├── szukaj.py\n"
+                "  └── converters/\n"
+                "      ├── __init__.py\n"
+                "      ├── core.py\n"
+                "      ├── formulas.py\n"
+                "      ├── analysis.py\n"
+                "      └── gui_tab.py"
+            )
+            ttk.Label(p, text=msg, font=("Consolas", 10),
+                      foreground="#c0392b", justify="left").grid(
+                row=0, column=0, padx=40, pady=40, sticky="nw")
+            self._converter_tab = None
+            return
+
+        self._converter_tab = ConverterTab(p, df=self.df)
 
     # ==================================================================
     # SEARCH TAB  – używa preprocess_query ze szukaj.py
