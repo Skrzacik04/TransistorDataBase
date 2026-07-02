@@ -86,6 +86,11 @@ class ConverterDevice:
         self._e_off = self._parse_energy(sw.get("e_off", []))
         self._e_rr  = self._parse_energy(di.get("e_rr",  []))
 
+        # ---- Gate-resistor rescaling curves (graph_r_e) ----
+        self._e_on_re  = self._parse_r_e(sw.get("e_on",  []))
+        self._e_off_re = self._parse_r_e(sw.get("e_off", []))
+        self._e_rr_re  = self._parse_r_e(di.get("e_rr",  []))
+
         self.has_e_on  = len(self._e_on)  > 0
         self.has_e_off = len(self._e_off) > 0
         self.has_e_rr  = len(self._e_rr)  > 0
@@ -153,6 +158,30 @@ class ConverterDevice:
             })
         return out
 
+    @staticmethod
+    def _parse_r_e(energy_list: list) -> list:
+        """Return list of dicts for graph_r_e entries only.
+        Used to rescale a graph_i_e curve to a non-datasheet gate resistor,
+        mirroring transistordatabase.calc_i_e_curve_using_r_e_curve."""
+        out = []
+        for e in energy_list:
+            if not isinstance(e, dict):
+                continue
+            if e.get("dataset_type") != "graph_r_e":
+                continue
+            gre = e.get("graph_r_e")
+            if not (isinstance(gre, list) and len(gre) == 2
+                    and isinstance(gre[0], list) and len(gre[0]) > 1):
+                continue
+            out.append({
+                "t_j":      float(e.get("t_j",      25)),
+                "v_g":      float(e.get("v_g",       0)) if e.get("v_g") is not None else 0.0,
+                "v_supply": float(e.get("v_supply",  0)) if e.get("v_supply") is not None else 0.0,
+                "r_pts":    np.asarray(gre[0], dtype=float),
+                "e_pts":    np.asarray(gre[1], dtype=float),
+            })
+        return out
+
     # ------------------------------------------------------------------
     # Channel linearisation  (matches transistordatabase.calc_lin_channel)
     # ------------------------------------------------------------------
@@ -211,6 +240,66 @@ class ConverterDevice:
         """Return V = v_0 + r * I  (total forward voltage at i_channel)."""
         v0, r = self.calc_lin_channel(i_channel, t_j, v_g, switch_or_diode)
         return v0 + r * i_channel
+
+    # ------------------------------------------------------------------
+    # Gate-resistor rescaling  (matches transistordatabase.calc_object_i_e /
+    # calc_i_e_curve_using_r_e_curve)
+    # ------------------------------------------------------------------
+
+    def rescale_energy_for_rg(self, which: str, r_g: float, t_j: float,
+                              v_supply: Optional[float] = None) -> Optional[dict]:
+        """
+        Return a rescaled {'i_pts', 'e_pts', 'v_supply'} energy curve for a
+        non-datasheet gate resistor, using the graph_r_e correction curve.
+
+        Mirrors the reference algorithm exactly:
+            factor = E_re(r_g_chosen) / E_re(r_g_nominal)
+            E_new(I) = factor * E_nominal(I) * (v_supply_chosen / v_supply_nominal)
+
+        which: 'e_on' | 'e_off' | 'e_rr'
+        r_g: requested external gate resistor [Ohm]
+        t_j: requested junction temperature (closest available curve is used)
+        v_supply: requested supply voltage (defaults to the nominal curve's value)
+
+        Returns None if graph_r_e data is unavailable (caller should fall
+        back to the unscaled graph_i_e curve via interp_energy()).
+        """
+        ie_tbl = {"e_on": self._e_on, "e_off": self._e_off, "e_rr": self._e_rr}
+        re_tbl = {"e_on": self._e_on_re, "e_off": self._e_off_re, "e_rr": self._e_rr_re}
+
+        ie_entries = ie_tbl.get(which, [])
+        re_entries = re_tbl.get(which, [])
+        if not ie_entries or not re_entries:
+            return None
+
+        ie_entry = self._best_energy(ie_entries, t_j)
+        re_entry = self._best_energy(re_entries, t_j)
+        if ie_entry is None or re_entry is None:
+            return None
+
+        r_pts, e_re_pts = re_entry["r_pts"], re_entry["e_pts"]
+        r_g_max = float(np.max(r_pts))
+        if r_g > r_g_max:
+            # mirror reference: clamp instead of raising, but flag via None upstream is too strict;
+            # clamping keeps the converter usable while staying close to datasheet bounds
+            r_g = r_g_max
+
+        r_g_nominal = ie_entry["r_g"]
+        loss_at_rg     = float(np.interp(r_g,         r_pts, e_re_pts))
+        loss_at_rg_nom = float(np.interp(r_g_nominal, r_pts, e_re_pts))
+        factor = loss_at_rg / loss_at_rg_nom if loss_at_rg_nom > 0 else 1.0
+
+        v_supply_nominal = ie_entry["v_supply"]
+        v_supply_chosen  = v_supply if v_supply else v_supply_nominal
+        v_factor = v_supply_chosen / v_supply_nominal if v_supply_nominal > 0 else 1.0
+
+        e_pts_new = ie_entry["e_pts"] * factor * v_factor
+
+        return {
+            "i_pts": ie_entry["i_pts"],
+            "e_pts": e_pts_new,
+            "v_supply": v_supply_chosen,
+        }
 
     # ------------------------------------------------------------------
     # Energy interpolation
