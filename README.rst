@@ -1,445 +1,254 @@
-.. sectnum::
+# Transistor Database — Local Edition
 
-###########################
-Transistordatabase
-###########################
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![Status](https://img.shields.io/badge/status-alpha-yellow)
+![License](https://img.shields.io/badge/license-GPLv3-lightgrey)
 
-The Transistordatabase is a tool developed by LEA from the University Paderborn which helps working with choosing transistors for the developement of electronics.
-When it comes to the point of choosing a transistor, there is typically a lot of trouble with different programs. Often there are multiple programs for
-calculating transistor parameters and a schematic simulator to verify the results.
-Now your colleague is working on a different electronics topology and may use different programs. This is a problem because in most cases your transistors will never be
-compatible with the ones from your colleague. The Transistordatabase now solves this problem:
-Here Transistors can be saved in a database and makes them easy to interchange between platforms. It is possible to export
-Transistor data to various simulation software and share it to a colleague using a .json-File.
+A local transistor database with a CLI backend (`szukaj.py`) and a graphical frontend (`GUI.py`).
+Transistor data is stored as structured `.json` files and can be searched, filtered, compared, and exported — no internet required.
 
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/images/Why_transistordatabase.png
-    :align: center
-    :alt: Why transistor database?
+**Supported categories:** GaN · IGBT · SiC-MOSFET · Si-MOSFET
 
+---
 
-Functionality overview
-***********************
+## Table of contents
 
-Here are some examples on the functionality of the Transistordatabase:
+- [Architecture](#architecture)
+- [Requirements](#requirements)
+- [Project structure](#project-structure)
+- [Getting started](#getting-started)
+- [GUI — tab reference](#gui--tab-reference)
+- [CLI — command reference](#cli--command-reference)
+- [Search syntax](#search-syntax)
+- [Data format](#data-format)
+- [PLECS XML export and import](#plecs-xml-export-and-import)
+- [Adding a new transistor](#adding-a-new-transistor)
+- [Troubleshooting](#troubleshooting)
 
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/images/Workflow.png
-    :align: center
-    :alt: Workflow
+---
 
-* digitize transistor datasheet parameters and graphs and save it to the TDB (Transistordatabase)
-* use this data for calculations in python (e.g. some loss calulations for a boost-converter)
-* export this data to matlab for calculations in matlab
-* export transistors to GeckoCIRCUITS simulation program
-* export transistors to Simulink simulation program
-* export transistors to PLECS simulation program
+## Architecture
 
-.. note::
-    Development status: Alpha
+The project is split into two strictly separated layers — the GUI never implements data logic of its own.
 
+| Layer | File | Role |
+|---|---|---|
+| Core engine | `szukaj.py` | All data operations: loading, querying, exporting, editing |
+| Graphical frontend | `GUI.py` | Visual wrapper — delegates everything to `szukaj.py` |
 
-###########################
-Features
-###########################
+**`szukaj.py`** loads all `.json` files into a flat `pandas.DataFrame`, preprocesses search queries (fuzzy matching, case-insensitive `==`, combined `&`), extracts chart series recursively, and handles all export formats. It can be used entirely standalone from the terminal.
 
-There are 3 features implemented in the Transistordatabase. First is the python interface which can be used to manage the Database and
-their Transistors. The python interface can also be used to implemement optimization routines.
-Then there is a GUI which is mostly used to manage the Database and visualize different properties of the stored Transistors.
-As the third feature the Transistordatabase can be updated by an Online-Database. You can choose to work with our Online Repository or create your own if needed. 
+**`GUI.py`** is a Tkinter-based wrapper. It adds a sortable table with per-column filters, inline `matplotlib` chart rendering, a side-by-side comparison view with highlighted differences, and file dialogs for import and export.
 
-Python interface
-*******************************
+---
 
-Use the transistor data in you self-written optimization program, see figure:
+## Requirements
 
-* Automatic calculate your converter losses with many different transistors
-* Search the database for usable transistors for your application
-* Functions provided, to search for closest operating point
-* Functions provided, to linearize the transistor/diode conduction behaviour
-* Functions provided, to calculate the output capacitances Energy from the C_oss-curve 
-* Use own loss measurements for above features (coming soon)
+Python **3.11 or newer**.
 
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/documentation/workflow_wp.png
-    :align: center
-    :alt: optimization
+```bash
+pip install pandas matplotlib pillow
+```
 
-GUI
-*******************************
+> `pypdf` (used for PDF import) and `pyreadline3` (terminal history on Windows) are installed automatically by `szukaj.py` on first run if missing.
+> Standard library modules — `tkinter`, `os`, `json`, `xml`, `subprocess` — need no installation.
 
-* Manage, store and search the transistors
-* Export transistor models to programs like GeckoCIRCUITS, PLECS, Matlab/Octave
-* Compare transistors (interpolate switch loss data for new gate resistors and temperatures, ...)
+---
 
-Here are some screenshots of the GUI:
+## Project structure
 
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/images/gui_database.png
-    :align: center
-    :alt: gui_database
+```
+TRANSISTORDATABASE/
+│
+├── GUI.py                       # Graphical frontend
+├── szukaj.py                    # CLI backend and data engine
+│
+├── GaN/                         # One folder per technology category
+│   └── 650V/
+│       └── GaNSystems_GS66506T.json
+├── IGBT/
+│   └── 1200V/
+├── SiC-MOSFET/
+│   └── 900V/
+├── Si-MOSFET/
+│   └── 650V/
+│
+├── Exported_Transistors/        # Created by the export command
+└── Exported_Comparisons/        # Created by the compare command
+```
+
+> The four technology folders are created automatically on first startup if they do not exist.
+
+---
+
+## Getting started
+
+> **Important:** always run from the directory that contains `GUI.py` and `szukaj.py`. Paths are resolved relative to the script location, not the working directory.
+
+```bash
+# Graphical interface
+python GUI.py
+
+# Interactive CLI
+python szukaj.py
+
+# Non-interactive / scripting mode
+python szukaj.py --query "v_abs_max >= 1200"
+python szukaj.py --query "manufacturer == 'Infineon' & i_abs_max > 50" --export
+```
+
+---
 
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/images/gui_comparison.png
-    :align: center
-    :alt: gui_comparison
+## GUI — tab reference
+
+| Tab | What it does |
+|---|---|
+| 🔍 **Browser** | Sortable table of all loaded transistors. Toggle column visibility and apply per-column text/numeric filters in the side panel. Double-click any row to open its Profile. |
+| 🔎 **Search** | Eight quick-filter fields (Name, Category, Manufacturer, V≥, I≥, I\_cont≥, Housing, Technology) plus a raw pandas query box. Uses the same fuzzy preprocessor as the CLI. Results sync back to the Browser. |
+| 📋 **Profile** | Full parameter table for one device. Copy a selected value or all parameters as TSV. Choose a chart from the dropdown and open it in a matplotlib window. Open the raw JSON in your system editor. |
+| 📊 **Compare** | Build a basket of 2 or more transistors. Renders a side-by-side parameter table — cells where values differ are highlighted. Chart series are shown as mini-plots inside the cells; click any to open the full interactive window. Export common chart series as CSV files. |
+| ➕ **Create** | Form for entering scalar parameters with greyed-out placeholders. Attach curve data as CSV files for each graph field. Saves a fully structured JSON via `build_structured_json()`. |
+| ✏️ **Edit** | Load a transistor from the dropdown, edit scalar fields and replace curve CSVs inline, then save. Alternatively, open the raw JSON directly in Notepad / gedit. |
+| 📥 **Import** | Import a ready-made JSON file, or import a PLECS XML switch + diode pair. |
+| 📤 **Export** | Export one transistor (selected from the dropdown) or multiple transistors (selected in the Browser) to JSON, CSV with chart CSVs, or PLECS XML. |
+
+---
+
+## CLI — command reference
+
+At the `search >` prompt:
+
+| Command | Description |
+|---|---|
+| `help` | Show the full help screen with syntax examples |
+| `list` | List all transistors with key parameters |
+| `list_params` | Show all active database columns with descriptions |
+| `info <param>` | Show the label and description for a specific field |
+| `full` | Show all 66 fields for the last single-result query |
+| `compare` | Build a comparison basket interactively, then export common chart CSVs |
+| `create` | Create a blank JSON template and open it in the system editor |
+| `edit` | Pick a transistor and open its JSON in the system editor |
+| `import` | Import from a PDF datasheet, a JSON file, or PLECS XML |
+| `export` | Export the last query results to JSON, CSV, or PLECS XML |
+| `exit` | Quit |
 
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/images/gui_create_transistor.png
-    :align: center
-    :alt: gui_create_transistor
+---
 
+## Search syntax
 
-Transistordatabase Fileexchange
-*******************************
+Text fields use **fuzzy partial matching** — `==` is automatically converted to a case-insensitive substring check:
 
-`This <https://github.com/upb-lea/transistordatabase_File_Exchange>`__ repository contains the Transistors currently added to the Transistordatabase.
-Every Transistor from this repository can be automatically downloaded to your local Database. Since this only relies on the index.txt containing the links
-to each transistor which shall be downloaded it is possible to create your own repository. Next to the Transistor updates there is a list of housing types and
-module manufacturers which are supported by the Database which are also set in the Fileexchange respository.
+```
+name == 'C3M'                            matches any name containing C3M
+manufacturer == 'Fuji'                   matches "Fuji Electric"
+Category == 'SiC'                        matches "SiC-MOSFET"
+v_abs_max >= 1200                        numeric threshold
+v_abs_max >= 900 & i_cont > 200          AND of two conditions
+v_abs_max == 650 & Category == 'GaN'     combined text and numeric
+```
 
-You can publish your own Transistors to this repository by generating a pull request.
-If you don't want to create a github account, you can also send the .json file to this :email:`email address <tdb@lea.upb.de>`.
+If the query matches exactly one transistor, its profile is displayed immediately.
+If it matches multiple, a numbered table is printed — enter a row number to inspect that device.
 
+---
 
-############
-Installation
-############
+## Data format
 
-Windows
-*******
+Each transistor is stored as one `.json` file. Scalar parameters sit at the root level. Curve data lives inside `switch` and `diode` sub-objects as `[[X values], [Y values]]` pairs.
 
-Install Python
---------------
-Install latest Python version: `Link <https://www.python.org/>`__.
+```json
+{
+  "name": "GaNSystems_GS66506T",
+  "manufacturer": "GaN Systems",
+  "type": "GaN-Transistor",
+  "v_abs_max": 650,
+  "i_cont": 22,
+  "r_th_cs": 0.5,
 
-Install Pycharm (optional)
---------------------------
-`Installation file <https://www.jetbrains.com/pycharm/download/download-thanks.html?platform=linux&code=PCC>`_.
+  "switch": {
+    "channel": [
+      { "t_j": 25,  "v_g": 6, "graph_v_i": [[0.0, 1.0, 2.0], [0.0, 4.0, 9.0]] },
+      { "t_j": 125, "v_g": 6, "graph_v_i": [[0.0, 1.0, 2.0], [0.0, 3.0, 7.0]] }
+    ],
+    "e_on": [
+      {
+        "t_j": 25, "v_supply": 400, "dataset_type": "graph_i_e",
+        "graph_i_e": [[5, 10, 15], [1e-6, 2e-6, 4e-6]]
+      }
+    ],
+    "e_off": [],
+    "thermal_foster": {
+      "r_th_vector": [0.1, 0.2],
+      "tau_vector": [0.01, 0.05]
+    }
+  },
 
-Download and run executable
----------------------------
-Download exe-file `here <https://groups.uni-paderborn.de/lea/public/downloads/transistordatabase.zip>`_
+  "diode": {
+    "channel": [],
+    "e_rr": []
+  }
+}
+```
 
+All chart keys follow the pattern `"graph_<name>": [[X], [Y]]`. The function `deep_search_charts()` in `szukaj.py` finds every such series recursively, regardless of nesting depth.
 
-Linux
-*****
-Ubuntu
+---
 
-.. code-block::
+## PLECS XML export and import
 
-   sudo apt install python3 python3-pip
+### Export
 
-.. note::
-    Install pycharm from Snapstore
+Reads `switch.channel`, `switch.e_on`, `switch.e_off`, `diode.channel`, `diode.e_rr`, and the Foster thermal network, and produces two files:
 
-All Operating systems: Install the transistor database
-******************************************************
-Inside pycharm, create a new project. Select 'new environment using' -> 'Virtualenv'. |br|
-As a base interpreter, select 'C:\Users\xxxxxx\AppData\Local\Programs\Python\Python39\Python.exe'. Click on create. |br|
-Navigate to file -> settings -> Project -> Python Interpreter -> '+' -> search for 'transistordatabase' -> 'Install Package' |br|
+```
+DeviceName_switch.xml
+DeviceName_diode.xml
+```
 
+These follow the PLECS semiconductor XML format (v1.1) and can be loaded directly into a PLECS schematic. If energy loss data is absent, zero-filled tables are used so the file still loads without errors.
 
-##########################
-Complete documentation
-##########################
-The complete documentation can be found `here <https://upb-lea.github.io/transistordatabase/main/transistordatabase.html>`__.
+- **GUI:** Export tab → select transistor → choose **PLECS XML** → click Export
+- **CLI:** run `export` after a search → option `[3]`
 
+### Import
 
-##########################
-Usage
-##########################
+Reads `ConductionLoss`, `TurnOnLoss`, `TurnOffLoss`, and the Foster `ThermalModel` section from a PLECS XML file and saves a structured JSON into the correct category folder.
 
-Minimal python example
-*******************************
+Fields that PLECS XML does not carry (`v_abs_max`, `housing_type`, etc.) are left blank. Fill them in afterwards using the **Edit** tab or the `edit` command.
 
-.. code-block::
+---
 
-    from transistordatabase.database_manager import DatabaseManager
+## Adding a new transistor
 
-    # Path for json files
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tdb_example")
+1. Digitize datasheet curves using [WebPlotDigitizer](https://apps.automeris.io/wpd/) and export each curve as a two-column CSV.
+2. In the GUI, open the **Create** tab. Fill in all scalar fields and click **Add curves…** for each graph field to attach the CSVs.
+3. Click **Save New Transistor**. The file is placed in `<Category>/<voltage>V/<name>.json`.
+4. Switch to the **Edit** tab, load the record, and verify that all values were saved correctly.
 
-    # Create DatabaseManager instance and set it to json format
-    tdb_json = DatabaseManager()
-    tdb_json.set_operation_mode_json(path)
+Alternatively, use the `create` command in the CLI to generate a blank JSON template, then fill it in a text editor.
 
-    # Print database
-    tdb_json.print_tdb()
+---
 
-    # load a transistor from the database
-    transistor_loaded = tdb_json.load_transistor('CREE_C3M0016120K')
+## Troubleshooting
 
-In addition to that in `this file <https://github.com/upb-lea/transistordatabase/blob/main/transistordatabase/housing_types.txt>`_ there are
-more simple examples.
+**`ModuleNotFoundError: No module named 'pandas'`**
+Run `pip install pandas matplotlib pillow`. If that does not help, make sure you are running pip for the same Python interpreter you use to launch the scripts.
 
+**Database loads 0 transistors**
+The four technology folders (`GaN/`, `IGBT/`, `SiC-MOSFET/`, `Si-MOSFET/`) must be in the same directory as `GUI.py` and `szukaj.py`. Always launch the application from inside the project folder.
 
-Generate a new transistor
-*************************
+**PLECS export skipped with "no channel data"**
+The JSON must contain at least one entry with a `graph_v_i` key inside `switch.channel`. The diode XML is silently skipped if `diode.channel` is empty.
 
-Transistor object basics
-------------------------
-Transistor |br|
-| |br|
-+-Metadata |br|
-| |br|
-+-Switch |br|
-| +-Switch Metadata |br|
-| +-Channel Data |br|
-| +-Switching Data |br|
-| |br|
-+-Diode |br|
-| +-Diode Metadata |br|
-| +-Channel Data |br|
-| +-Switching Data |br|
-| |br|
-+-wp (temporary storage for further calculations) |br|
+**JSON validation error after editing**
+Notepad does not warn about JSON syntax errors. Common mistakes are trailing commas, unquoted strings, and mismatched brackets. Paste the file content into [jsonlint.com](https://jsonlint.com) to locate the problem.
 
-Reading curves from the datasheet
----------------------------------
-For reading datasheet curves, use the tool `WebPlotDigitizer <https://apps.automeris.io/wpd/>`_. There is a online-version available. Also you can download it for Linux, Mac and Windows. WebPlotDigitizer is open source software.
+**`SyntaxError` on startup**
+Make sure the file starts with `import tkinter`, not with a bash command. If the file was generated incorrectly, re-download it.
 
-Channel data for switch and diode always needs to be positive. Some Manufacturers give diode data in the 3rd quadrant. Here is an example how to set the axes and export the data inside WebPlotDigitizer:
+---
 
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/images/Diode_channel_data_negative.png
-    :align: center
-    :alt: diode channel data negative
+## License
 
-Use the template to generate a new transistor object
-----------------------------------------------------
-
-After digitizing the curves, you can use a template to generate a new transistor object and store it to the database. For this, see the  `template </template_example/template_example.py>`_.
-
-Some values need to follow some rules, e.g. due to different spelling versions, the manufacturers name or housing types must be written as in the lists below. Some general hints to fill the template:
-
-    * `List of manufacturers <https://github.com/upb-lea/transistordatabase/blob/main/transistordatabase/module_manufacturers.txt>`_
-    * `List of housing types <https://github.com/upb-lea/transistordatabase/blob/main/transistordatabase/housing_types.txt>`_
-    * `Fuji housing overview <https://www.fujielectric.com/products/semiconductor/model/igbt/2pack.html>`_
-
-In many cases, two capacity curves are specified in the data sheets. One curve for the full voltage range, and one with zoom to a small voltage range. To represent the stored curves in the best possible way, both curves can be read in and then merged.
-
-.. code-block::
-
-    c_rss_normal = csv2array('transistor_c_rss.csv', first_x_to_0=True)
-    c_rss_detail = csv2array('transistor_c_rss_detail.csv', first_x_to_0=True)
-
-    transistor_args = {
-                   ...
-                   'c_rss': {"t_j": 25, "graph_v_c": c_rss_merged},
-				   ...
-                   }
-
-
-
-
-Usage of Transistor.wp. in your programs
-*********************************************
-There is a subclass .wp where you can fill for further program calculations.
-
-Full-automated example
-----------------------
-**Use the quickstart method to fill in the wp-class**
-
-There is a search function, that chooses the closes operating point. In the full-automated method, there are some predefined values
-
-    * Chooses transistor.switch.t_j_max - 25°C as operating temperature to start search
-    * Chooses transistor.i_abs_max/2 as operating current to start search
-    * Chooses v_g = 15V as gate voltage to start search
-
-.. code-block::
-
-   transistor_loaded.quickstart_wp()
-
-Half-automated example
-----------------------
-**Fill in the wp-class by a search-method to find the closes working point to your methods**
-
-Insert a working point of interest. The algorithm will find the closest working point and fills out the Transistor.wp.-class
-.. code-block::
-
-   transistor_loaded.update_wp(125, 15, 50)
-
-Non-automated example
----------------------
-**Fill in the wp-class manually**
-
-Look for all operating points manually. This will result in an error in case of no match.
-.. code-block::
-
-    transistor_loaded.wp.e_oss = transistor_loaded.calc_v_eoss()
-    transistor_loaded.wp.q_oss = transistor_loaded.calc_v_qoss()
-
-    # switch, linearize channel and search for losscurves
-    transistor_loaded.wp.switch_v_channel, transistor_loaded.wp.switch_r_channel = transistor_loaded.calc_lin_channel(25, 15, 150, 'switch')
-    transistor_loaded.wp.e_on = transistor_loaded.get_object_i_e('e_on', 25, 15, 600, 2.5).graph_i_e
-    transistor_loaded.wp.e_off = transistor_loaded.get_object_i_e('e_off', 25, -4, 600, 2.5).graph_i_e
-
-    # diode, linearize channel and search for losscurves
-    transistor_loaded.wp.diode_v_channel, transistor_loaded.wp.diode_r_channel = transistor_loaded.calc_lin_channel(25, -4, 150, 'diode')
-
-Calculations with transistor objects
-************************************
-
-Parallel transistors
---------------------
-To parallel transistors use the function.
-
-  * In case of no parameter paralleling is for 2 transistors
-  * In case of parameter, paralleling is for x transistors. Example here is for three transistors.
-
-.. code-block::
-
-    parallel_transistorobject = tdb_json.parallel_transistors(transistor_loaded, 3)
-
-After this, you can work with the transistor object as usual, e.g. fill in the .wp-workspace or export the device to Matlab, Simulink or GeckoCIRCUITS.
-
-#########################
-Export transistor objects
-#########################
-
-Using transistors within pyhton you have already seen. Now we want to take a closer look at exporting the transistors to other programs. These exporters are currently working. Some others are planned for the future.
-
-Export a Virtual datasheet
-***************************
-This function exports a virtual datasheet to see stored data in the database. Function display the output path of .html-file, which can be opened in your preferred browser.
-
-.. code-block::
-
-    # Windows users: export datasheet
-    transistor_loaded.export_datasheet()
-
-    # Linux users: export datasheet as html
-    # look for CREE_C3M0016120K.html in your current working directory
-    html_str = transistor_loaded.export_datasheet(build_collection=True)
-    Html_file = open(f"{transistor_loaded.name}.html", "w")
-    Html_file.write(html_str)
-    Html_file.close()
-
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/images/Virtual_Datasheet.png
-    :align: center
-    :alt: Generated virtual datasheet example
-
-Export to GeckoCIRCUITS
-***********************
-GeckoCIRCUITS is an open source multi platform schematic simulator. Java required. Direct `download link <http://gecko-simulations.com/GeckoCIRCUITS/GeckoCIRCUITS.zip>`_.
-At the moment you need to know the exporting parameters like gate resistor, gate-voltage and switching voltage. This will be simplified in the near future.
-
-.. code-block::
-
-    transistor_loaded.export_geckocircuits(True, 600, 15, -4, 2.5, 2.5)
-
-From now on, you can load the model into your GeckoCIRCUITS schematic.
-
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/images/Example_Gecko_Exporter.png
-    :align: center
-    :alt: GeckoExporter usage example
-
-.. hint::
-    It is also possible to control GeckoCIRCUITS from python, e.g. to sweep transistors. In this case, linux users should consider to run `this <https://github.com/tinix84/gecko/releases/tag/v1.1>`_ Version of GeckoCIRCUITS instead the above one (port to OpenJDK).
-
-Export to PLECS
-***************
-For a thermal and loss simulation using PLECS simulation tool, it requires the transistor loss and characteristic curves to be loaded in XML(Version 1.1) file format. More information on how to load the XML data can be found from here. To export the transistor object from your database to plecs required xml file format, following lines need to be executed starting with loading the required datasheet.
-
-.. code-block::
-
-    transistor_loaded.export_plecs()
-
-Outputs are xml files - one for switch and one for diode (if available), which can be then loaded into your schematic following the instructions as mentioned `here <https://www.plexim.com/support/videos/thermal-modeling-part-1>`__. Note that if channel curves for the default gate-voltage are found missing then the xml files could not be possible to generate and a respective warning message is issued to the user. The user can change the default gate-voltage and switching voltage by providing an extra list argument as follows:
-
-.. code-block::
-
-    transistor_loaded.export_plecs([15, -15, 15, 0])
-
-Note that all the four parameters (Vg_on, Vg_off) for IGBTs/Mosfets and (Vd_on, Vd_off) for reverse/body diodes are necessary to select the required curves that needs to be exported to switch and diode XMLs respectively.
-
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/images/PLECS_thermal_editor.png
-    :align: center
-    :alt: PLECS thermal exporter usage example
-
-Export to Simulink
-******************
-For a loss simulation in simulink, there is a IGBT model available, which can be found in this `simulink model <https://de.mathworks.com/help/physmod/sps/ug/loss-calculation-in-a-three-phase-3-level-inverter.html>`_ . Copy the model to you schematic and fill the parameters as shown in the figure. Export a transistor object from your database by using the following command. Example for a Infineon transistor.
-.. code-block::
-
-    transistor_loaded = db.load_transistor('Infineon_FF200R12KE3')
-    transistor_loaded.export_simulink_loss_model()
-
-Output is a .mat-file, you can load in your matlab program to simulate. Now, you are able to sweep transistors within your simulation. E.g. some matlab-code:
-
-.. code-block::
-
-    load Infineon_FF200R12KE3_Simulink_lossmodel.mat;
-    load Infineon_FF300R12KE3_Simulink_lossmodel.mat;
-    load Fuji_2MBI200XBE120-50_Simulink_lossmodel.mat;
-    load Fuji_2MBI300XBE120-50_Simulink_lossmodel.mat;
-    Transistor_array = [Infineon_FF200R12KE3 Infineon_FF300R12KE3 Fuji_2MBI200XBE120-50 Fuji_2MBI300XBE120-50];
-    for i_Transistor = 1:length(Transistor_array)
-        Transistor = Transistor_array(i_Transistor);
-        out = sim('YourSimulinkSimulationHere');
-
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/images/Example_Simulink_Exporter.png
-    :align: center
-    :alt: Simulink exporter usage example
-
-Export to Matlab/Octave
-***********************
-Python dictionary can be exported to Matlab, see the following example:
-
-.. code-block::
-
-    transistor_loaded = db.load_transistor('Fuji_2MBI100XAA120-50')
-    transistor_loaded.export_matlab()
-
-A .mat-file is generated, the exporting path will be displayed in the python console. You can load this file into matlab or octave.
-
-.. image:: https://raw.githubusercontent.com/upb-lea/transistordatabase/main/docs/images/Matlab.png
-    :align: center
-    :alt: Matlab .mat exporter usage example
-
-
-#######
-Others
-#######
-
-For developers
-***********************
-
-Currently the transistordatabase does not only support a json format but also a mongodb database.
-Therefore mongodb needs to be installed:
-Install with standard settings. Use the MongoDB community server, as platform, choose windows `Link <https://www.mongodb.com/try/download/community>`__.
-
-Roadmap
-*******
-Planned features in 2024
-
-* Focus on adding self-measured data to the database
-* Working with self-measured data in exporters
-* Usability improvements
-* Stable software
-
-Organisation
-************
-Bug Reports
------------
-Please use the issues report button within github to report bugs.
-
-Changelog
----------
-Find the changelog `here <https://github.com/upb-lea/transistordatabase/blob/main/CHANGELOG.md>`__.
-
-Contributing
-------------
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change. For contributing, please refer to this `section <https://github.com/upb-lea/transistordatabase/blob/main/Contributing.rst>`_.
-
-About
-*****
-History and project status
---------------------------
-This project started in 2020 as a side project and was initially written in matlab. It quickly became clear that the project was no longer a side project. The project should be completely rewritten, because many new complex levels have been added. To place the project in the open source world, the programming language python is used.
-
-In January 2021 a very early alpha status was reached. First pip package was provided in may 2021. First GUI is provided in June 2022.
-
-License
--------
-Licensed under `GPLv3 <https://choosealicense.com/licenses/gpl-3.0/>`_
-
-
-
-.. |br| raw:: html
-
-      <br>
+Local fork, based on **Transistordatabase** by LEA, University of Paderborn.
+Original project licensed under [GPLv3](https://choosealicense.com/licenses/gpl-3.0/).
