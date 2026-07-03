@@ -56,16 +56,17 @@ class ConverterTab:
     def __init__(self, parent: tk.Widget, df=None):
         self.parent = parent
         self.df = df
-        self._devices: dict[str, ConverterDevice] = {}   # name → device cache
+        self._devices: dict[str, ConverterDevice] = {}
         self._plot_threads: list = []
         self._scroll_canvas: tk.Canvas | None = None
 
         parent.columnconfigure(0, weight=1)
-        parent.columnconfigure(1, weight=0)
         parent.rowconfigure(0, weight=1)
 
+        # ── Full-window scrollable canvas (controls + plots scroll together) ──
         canvas = tk.Canvas(parent, highlightthickness=0)
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical",
+                                  command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
@@ -73,28 +74,29 @@ class ConverterTab:
 
         content = ttk.Frame(canvas)
         content.columnconfigure(0, weight=1)
-        content.rowconfigure(1, weight=1)
         content_id = canvas.create_window((0, 0), window=content, anchor="nw")
 
         def _update_scroll_region(_event=None):
             canvas.configure(scrollregion=canvas.bbox("all"))
 
-        def _sync_content_width(event):
+        def _sync_width(event):
             canvas.itemconfigure(content_id, width=event.width)
 
         content.bind("<Configure>", _update_scroll_region)
-        canvas.bind("<Configure>", _sync_content_width)
-        canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        canvas.bind("<Configure>", _sync_width)
+
+        # Bind mousewheel only while cursor is over this canvas
+        canvas.bind("<Enter>", lambda _: canvas.bind_all(
+            "<MouseWheel>", self._on_mousewheel))
+        canvas.bind("<Leave>", lambda _: canvas.unbind_all("<MouseWheel>"))
 
         top = ttk.Frame(content)
         bottom = ttk.Frame(content)
         top.grid(row=0, column=0, sticky="ew", padx=6, pady=(6, 3))
-        bottom.grid(row=1, column=0, sticky="nsew", padx=6, pady=(3, 6))
+        bottom.grid(row=1, column=0, sticky="ew", padx=6, pady=(3, 6))
         top.columnconfigure(0, weight=1)
         bottom.columnconfigure(0, weight=1)
         bottom.columnconfigure(1, weight=1)
-        bottom.rowconfigure(0, weight=1)
-        bottom.rowconfigure(1, weight=1)
 
         self._build_left(top)
         self._build_right(bottom)
@@ -260,10 +262,11 @@ class ConverterTab:
 
     def _build_plot_panel(self, parent: tk.Widget, row: int, col: int, cfg: dict) -> dict:
         """Build one plot cell. Returns a dict of its widgets/variables."""
-        frame = ttk.Frame(parent)
+        frame = ttk.Frame(parent, height=420)
         frame.grid(row=row, column=col, sticky="nsew", padx=2, pady=2)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
+        frame.grid_propagate(False)
 
         # ── Selectors ──
         sel = ttk.LabelFrame(frame, text=" Plot Settings ", padding=4)
@@ -329,7 +332,7 @@ class ConverterTab:
                 def set_message(self, _message):
                     pass
 
-            fig  = Figure(figsize=(4, 3.5), dpi=90,
+            fig  = Figure(figsize=(5.5, 4.2), dpi=90,
                           facecolor="#f5f5f5", layout="none")
             if hasattr(fig, "set_layout_engine"):
                 fig.set_layout_engine(None)
