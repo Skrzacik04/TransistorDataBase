@@ -1,6 +1,6 @@
 """
-gui.py – Graficzna nakładka na szukaj.py
-Wszystkie operacje na danych delegowane są do funkcji z szukaj.py.
+gui.py - Graphical wrapper for szukaj.py
+All data operations are delegated to functions from szukaj.py.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -15,7 +15,7 @@ from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------------------------
-# Import szukaj.py z tego samego katalogu (bez względu na cwd)
+# Import szukaj.py from the same directory (regardless of cwd)
 # ---------------------------------------------------------------------------
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -23,12 +23,12 @@ spec = importlib.util.spec_from_file_location("szukaj", os.path.join(_THIS_DIR, 
 _szukaj = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_szukaj)
 
-# Wszystkie funkcje i stałe ze szukaj
+# All functions and constants from szukaj
 load_full_database          = _szukaj.load_full_database
 preprocess_query            = _szukaj.preprocess_query
 export_folder_structure     = _szukaj.export_folder_structure
 export_plecs_xml            = _szukaj.export_plecs_xml
-import_plecs_xml_func       = _szukaj.import_plecs_xml   # importujemy pod inną nazwą by nie kolidować
+import_plecs_xml_func       = _szukaj.import_plecs_xml   # imported under a different name to avoid collision
 import_ready_json_file      = _szukaj.import_ready_json_file
 deep_search_charts          = _szukaj.deep_search_charts
 build_structured_json       = _szukaj.build_structured_json
@@ -46,7 +46,7 @@ except ImportError:
     _CONVERTERS_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
-# Kolory i stałe UI
+# UI colors and constants
 # ---------------------------------------------------------------------------
 CLR_HDR   = "#2c3e50"
 CLR_BTN   = "#2980b9"
@@ -59,36 +59,36 @@ CLR_RED   = "#c0392b"
 TECH_CATEGORIES = ["GaN", "IGBT", "SiC-MOSFET", "Si-MOSFET"]
 
 # ---------------------------------------------------------------------------
-# Mapowanie nazw kluczy wykresów na etykiety osi fizycznych
-# Klucz to fragment nazwy ścieżki (podciąg), wartość to (xlabel, ylabel)
+# Mapping of chart key names to physical axis labels
+# Key is a fragment of the path name (substring), value is (xlabel, ylabel)
 # ---------------------------------------------------------------------------
 _CHART_AXIS_MAP = [
-    # napięcie - prąd przewodzenia
+    # voltage - conduction current
     ("graph_v_i",       "V [V]",        "I [A]"),
     ("graph_i_v",       "I [A]",        "V [V]"),
-    # energia przełączania vs prąd
+    # switching energy vs current
     ("graph_i_e",       "I [A]",        "E [J]"),
     ("e_on",            "I [A]",        "E_on [J]"),
     ("e_off",           "I [A]",        "E_off [J]"),
     ("e_rr",            "I [A]",        "E_rr [J]"),
-    # pojemności vs napięcie
+    # capacitances vs voltage
     ("c_iss",           "V_DS [V]",     "C_iss [F]"),
     ("c_oss",           "V_DS [V]",     "C_oss [F]"),
     ("c_rss",           "V_DS [V]",     "C_rss [F]"),
-    # energia w C_oss vs napięcie
+    # energy in C_oss vs voltage
     ("v_ecoss",         "V_DS [V]",     "E_oss [J]"),
-    # ładunek bramki
+    # gate charge
     ("charge",          "Q_g [C]",      "V_GS [V]"),
     # SOA
     ("soa",             "V [V]",        "I [A]"),
-    # termiczne Foster
+    # thermal Foster
     ("thermal",         "t [s]",        "Z_th [K/W]"),
     # linearized
     ("linearized",      "I [A]",        "V [V]"),
 ]
 
 def _get_axis_labels(chart_key: str):
-    """Zwraca (xlabel, ylabel) na podstawie nazwy klucza wykresu."""
+    """Returns (xlabel, ylabel) based on the chart key name."""
     key_lower = chart_key.lower()
     for fragment, xl, yl in _CHART_AXIS_MAP:
         if fragment in key_lower:
@@ -96,7 +96,7 @@ def _get_axis_labels(chart_key: str):
     return "X", "Y"
 
 # ============================================================================
-# HELPER: wykrywanie pól z krzywymi
+# HELPER: detecting fields with curves
 # ============================================================================
 def is_curve_field(fn):
     return (fn.startswith("graph_") or fn.startswith("diode_") or
@@ -106,10 +106,10 @@ def is_curve_field(fn):
         and "technology" not in fn and "t_j_max" not in fn
 
 # ============================================================================
-# HELPER: wczytaj JSON bezpośrednio
+# HELPER: load JSON directly
 # ============================================================================
 def load_json_for_name(name: str, df: pd.DataFrame):
-    """Zwraca (dict, path) lub (None, None). Szuka w df, potem przez os.walk."""
+    """Returns (dict, path) or (None, None). Searches in df, then via os.walk."""
     name = name.strip()
     for sub in [df[df["name"] == name],
                 df[df["name"].str.lower() == name.lower()]]:
@@ -142,7 +142,7 @@ def load_json_for_name(name: str, df: pd.DataFrame):
     return None, None
 
 # ============================================================================
-# POPUP: powiększony wykres z tooltipem współrzędnych i fizycznymi etykietami osi
+# POPUP: enlarged chart with coordinate tooltip and physical axis labels
 # ============================================================================
 def open_chart_popup(parent, title, curves, chart_key=""):
     xl, yl = _get_axis_labels(chart_key or title)
@@ -166,7 +166,7 @@ def open_chart_popup(parent, title, curves, chart_key=""):
     cv.get_tk_widget().pack(fill="both", expand=True)
     NavigationToolbar2Tk(cv, win).update()
 
-    # --- tooltip ze współrzędnymi ---
+    # --- tooltip with coordinates ---
     annot = ax.annotate("", xy=(0,0), xytext=(12,12), textcoords="offset points",
                         bbox=dict(boxstyle="round,pad=0.4", fc="#ffffcc", ec="#888", alpha=0.9),
                         fontsize=8, visible=False)
@@ -191,7 +191,7 @@ def open_chart_popup(parent, title, curves, chart_key=""):
     win.protocol("WM_DELETE_WINDOW", lambda: (plt.close(fig), win.destroy()))
 
 # ============================================================================
-# GŁÓWNA KLASA GUI
+# MAIN GUI CLASS
 # ============================================================================
 class TransistorGUI:
     def __init__(self, root):
@@ -199,13 +199,13 @@ class TransistorGUI:
         self.root.title("Transistor Database – GUI for szukaj.py")
         self.root.geometry("1450x870")
 
-        self.df = load_full_database()      # pd.DataFrame – główna baza danych
+        self.df = load_full_database()      # pd.DataFrame - main database
         self.last_results: pd.DataFrame = self.df.copy()
 
         self._build_ui()
 
     # ------------------------------------------------------------------
-    # BUDOWA UI
+    # BUILD UI
     # ------------------------------------------------------------------
     def _build_ui(self):
         # Status bar FIRST – must exist before any _build_* method tries to use it
@@ -215,6 +215,15 @@ class TransistorGUI:
 
         self.nb = ttk.Notebook(self.root)
         self.nb.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Button launching my_transistor_app (Streamlit), overlaid
+        # on the top-right corner of the notebook's tab strip.
+        self._launch_app_btn = ttk.Button(
+            self.root, text="🚀 My Transistor App",
+            command=self._launch_my_transistor_app
+        )
+        self._launch_app_btn.place(in_=self.nb, relx=1.0, x=-6, y=3, anchor="ne")
+        self._launch_app_btn.lift()
 
         tabs = [
             ("tab_browser",  " 🔍 Browser "),
@@ -234,6 +243,7 @@ class TransistorGUI:
 
         self._build_browser()
         self._build_search()
+        self.root.bind("<Configure>", lambda e: self._launch_app_btn.lift())
         self._build_profile()
         self._build_compare()
         self._build_create()
@@ -241,6 +251,120 @@ class TransistorGUI:
         self._build_import()
         self._build_export()
         self._build_converter()
+
+    # ==================================================================
+    # LAUNCH: my_transistor_app (Streamlit)
+    # ==================================================================
+    @staticmethod
+    def _resolve_project_python():
+        """Returns the Python interpreter that should run my_transistor_app.
+
+        We deliberately do NOT trust sys.executable here. In practice a
+        PyCharm run configuration can point GUI.py itself at an unrelated
+        interpreter (e.g. a different project's .venv) even after the
+        project's interpreter setting has been changed - the two are
+        independent settings in PyCharm. Instead, we look directly for the
+        venv that lives inside THIS project (_THIS_DIR/.venv), since that is
+        the one place we can be certain is meant for this codebase. Only if
+        that venv doesn't exist do we fall back to sys.executable.
+        """
+        if os.name == "nt":
+            candidate = os.path.join(_THIS_DIR, ".venv", "Scripts", "python.exe")
+        else:
+            candidate = os.path.join(_THIS_DIR, ".venv", "bin", "python")
+        if os.path.exists(candidate):
+            return candidate
+        return sys.executable
+
+    def _launch_my_transistor_app(self):
+        """Launches my_transistor_app/streamlit_app.py via `python -m streamlit run`,
+        using the project's own .venv interpreter (see _resolve_project_python),
+        NOT necessarily the interpreter currently running GUI.py.
+        Runs in the background (no extra console window) so Streamlit's default
+        behavior (auto-opening the default browser) is what the user sees."""
+        app_dir  = os.path.join(_THIS_DIR, "my_transistor_app")
+        app_file = "streamlit_app.py"
+        app_path = os.path.join(app_dir, app_file)
+
+        if not os.path.exists(app_path):
+            messagebox.showerror(
+                "Nie znaleziono aplikacji",
+                f"Brak pliku:\n{app_path}\n\n"
+                "Sprawdź, czy folder 'my_transistor_app' leży obok GUI.py."
+            )
+            return
+
+        python_exe = self._resolve_project_python()
+
+        # Verify streamlit is importable in the TARGET interpreter (python_exe),
+        # which may differ from the interpreter currently running GUI.py -
+        # importlib.util.find_spec would only check the latter, so we spawn
+        # a tiny check in the actual target interpreter instead.
+        check = subprocess.run(
+            [python_exe, "-c", "import streamlit"],
+            capture_output=True, text=True
+        )
+        if check.returncode != 0:
+            messagebox.showerror(
+                "Brak Streamlit",
+                f"Moduł 'streamlit' nie jest zainstalowany w interpreterze:\n"
+                f"{python_exe}\n\n"
+                f"Zainstaluj:\n\"{python_exe}\" -m pip install streamlit\n\n"
+                f"Szczegóły błędu:\n{check.stderr.strip()[-500:]}"
+            )
+            return
+
+        # Streamlit's FIRST-EVER run on a machine/account shows an interactive
+        # "Email:" prompt on stdin and BLOCKS until Enter is pressed - before
+        # the server starts or the browser opens. Since we launch as a
+        # background subprocess (no attached terminal), that prompt can never
+        # be answered and the process just hangs forever with no visible
+        # error. Pre-creating credentials.toml with an empty email answers
+        # that prompt in advance, so this can't happen (to us or any other
+        # user running this for the first time on their machine).
+        st_config_dir = os.path.join(os.path.expanduser("~"), ".streamlit")
+        st_credentials = os.path.join(st_config_dir, "credentials.toml")
+        if not os.path.exists(st_credentials):
+            try:
+                os.makedirs(st_config_dir, exist_ok=True)
+                with open(st_credentials, "w", encoding="utf-8") as f:
+                    f.write("[general]\nemail = \"\"\n")
+            except OSError:
+                pass  # non-fatal - worst case the old blocking prompt returns
+
+        try:
+            # cwd=app_dir is essential - streamlit_app.py / selector
+            # assume imports/files relative to their own directory.
+            # python_exe -m streamlit -> the PROJECT's own .venv interpreter,
+            # independent of whatever interpreter happens to run GUI.py.
+            # No extra console window; Streamlit's own default behavior opens
+            # the browser tab.
+            # stdout/stderr -> log file (NOT DEVNULL) so failures are visible
+            # for debugging instead of silently disappearing.
+            #
+            # PYTHONPATH: selector.py / loss_engine.py do `import transistordatabase`,
+            # but that library is NOT pip-installed - it's a local, vendored copy
+            # that ships in the project root (_THIS_DIR/transistordatabase/), not
+            # inside my_transistor_app. Since the subprocess runs with
+            # cwd=app_dir, Python would never find it there on its own, so we
+            # add _THIS_DIR to PYTHONPATH for this subprocess only.
+            env = os.environ.copy()
+            existing_pp = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = _THIS_DIR + (os.pathsep + existing_pp if existing_pp else "")
+
+            log_path = os.path.join(app_dir, "streamlit_launch.log")
+            log_file = open(log_path, "w", encoding="utf-8")
+            self._streamlit_proc = subprocess.Popen(
+                [python_exe, "-m", "streamlit", "run", app_file],
+                cwd=app_dir,
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
+            self.status.config(text=f"My Transistor App started using {python_exe} – "
+                                     f"opening in your browser… (log: {log_path})")
+        except Exception as e:
+            messagebox.showerror("Błąd uruchamiania", str(e))
 
     # ==================================================================
     # BROWSER TAB
@@ -515,7 +639,7 @@ class TransistorGUI:
         self._converter_tab = ConverterTab(p, df=self.df)
 
     # ==================================================================
-    # SEARCH TAB  – używa preprocess_query ze szukaj.py
+    # SEARCH TAB  - uses preprocess_query from szukaj.py
     # ==================================================================
     def _build_search(self):
         p = self.tab_search
@@ -673,7 +797,7 @@ class TransistorGUI:
         self._do_export_df(sub)
 
     # ==================================================================
-    # PROFILE TAB  – wyświetla display_transistor_profile jako GUI
+    # PROFILE TAB  - displays display_transistor_profile as a GUI
     # ==================================================================
     def _build_profile(self):
         p = self.tab_profile
@@ -805,7 +929,7 @@ class TransistorGUI:
         self.nb.select(self.tab_compare)
 
     def _profile_open_editor(self):
-        """Otwiera plik JSON w edytorze systemowym – jak edit w szukaj.py."""
+        """Opens the JSON file in the system editor - like edit in szukaj.py."""
         if self._profile_row is None: return
         path = self._profile_row.get("_original_file_path")
         if not path or not os.path.exists(path):
@@ -836,7 +960,7 @@ class TransistorGUI:
         if not sub.empty: self._do_export_df(sub)
 
     # ==================================================================
-    # COMPARE TAB  – koszyk tranzystorów, wykresy obok siebie
+    # COMPARE TAB  - transistor basket, charts side by side
     # ==================================================================
     def _build_compare(self):
         p = self.tab_compare
@@ -936,7 +1060,7 @@ class TransistorGUI:
         self._compare_chart_figs.clear()
 
     def _compare_run(self):
-        """Buduje tabelę parametrów i mini-wykresy obok siebie – jak compare w szukaj.py."""
+        """Builds a parameter table and mini-charts side by side - like compare in szukaj.py."""
         names = self._compare_names
         if len(names) < 2:
             messagebox.showwarning("Compare","Add at least 2 transistors to compare."); return
@@ -1002,7 +1126,7 @@ class TransistorGUI:
             for ci, (n, vs) in enumerate(zip(names, vals)):
                 cell_bg = rbg
                 if is_curve:
-                    # Szukaj odpowiednich serii
+                    # Find matching series
                     series = []
                     for ck, sl in charts_data[n].items():
                         if ck.startswith(field) or field.startswith(ck):
@@ -1049,7 +1173,7 @@ class TransistorGUI:
         self._cmp_canvas.configure(scrollregion=self._cmp_canvas.bbox("all"))
 
     def _compare_export_csv(self):
-        """Eksportuje CSV z porównania – tak jak compare_transistor_charts w szukaj.py."""
+        """Exports CSV from the comparison - same as compare_transistor_charts in szukaj.py."""
         names = self._compare_names
         if len(names) < 2:
             messagebox.showwarning("Compare","Add at least 2 transistors."); return
@@ -1100,7 +1224,7 @@ class TransistorGUI:
         messagebox.showinfo("Done", f"Exported {exported} CSV file(s) to:\n{out_dir}")
 
     # ==================================================================
-    # CREATE TAB  – formularz + build_structured_json z szukaj.py
+    # CREATE TAB  - form + build_structured_json from szukaj.py
     # ==================================================================
     def _build_create(self):
         p = self.tab_create
@@ -1292,7 +1416,7 @@ class TransistorGUI:
                     foreground="gray", font=("Arial",8,"italic"))
 
     # ==================================================================
-    # EDIT TAB  – identyczny formularz co CREATE, wstępnie wypełniony danymi
+    # EDIT TAB  - identical form to CREATE, pre-filled with data
     # ==================================================================
     def _build_edit(self):
         p = self.tab_edit
@@ -1543,7 +1667,7 @@ class TransistorGUI:
         self._edit_status.config(text="", foreground="gray")
 
     # ==================================================================
-    # IMPORT TAB  – JSON, PLECS XML (jak szukaj.py)
+    # IMPORT TAB  - JSON, PLECS XML (like szukaj.py)
     # ==================================================================
     def _build_import(self):
         p = self.tab_import
@@ -1676,7 +1800,7 @@ class TransistorGUI:
             messagebox.showerror("Import Error",str(e))
 
     # ==================================================================
-    # EXPORT TAB  – export_folder_structure + export_plecs_xml z szukaj.py
+    # EXPORT TAB  - export_folder_structure + export_plecs_xml from szukaj.py
     # ==================================================================
     def _build_export(self):
         p = self.tab_export
@@ -1775,6 +1899,16 @@ class TransistorGUI:
 # ENTRY POINT
 # ============================================================================
 if __name__ == "__main__":
-    root = tk.Tk()
-    app  = TransistorGUI(root)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        app = TransistorGUI(root)
+        root.mainloop()
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb)
+        try:
+            messagebox.showerror("GUI startup error", tb)
+        except Exception:
+            pass
+        raise
