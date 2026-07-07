@@ -11,6 +11,11 @@ import atexit
 import xml.etree.ElementTree as ET
 import pandas as pd
 
+
+# Base directory of this module. Use this instead of the current working
+# directory so the app behaves the same no matter how it is launched.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # ---------------------------------------------------------------------------
 # AUTOMATYCZNE INSTALACJE I KONFIGURACJA HISTORII (UP/DOWN ARROWS)
 # ---------------------------------------------------------------------------
@@ -210,11 +215,12 @@ def load_full_database():
     print("Loading database, please wait...")
 
     for main_folder in tech_folders:
-        if not os.path.exists(main_folder):
-            os.makedirs(main_folder, exist_ok=True)
+        main_folder_path = os.path.join(BASE_DIR, main_folder)
+        if not os.path.exists(main_folder_path):
+            os.makedirs(main_folder_path, exist_ok=True)
             continue
 
-        for root_path, _, files in os.walk(main_folder):
+        for root_path, _, files in os.walk(main_folder_path):
             for file in files:
                 if file.endswith('.json'):
                     file_path = os.path.join(root_path, file)
@@ -344,7 +350,7 @@ def export_folder_structure(results_df, data_format=None):
         print("Invalid format. Aborting.")
         return
 
-    main_output_folder = "Exported_Transistors"
+    main_output_folder = os.path.join(BASE_DIR, "Exported_Transistors")
     os.makedirs(main_output_folder, exist_ok=True)
 
     for _, row in results_df.iterrows():
@@ -1093,7 +1099,7 @@ def compare_transistor_charts(df, preselected_names=None):
         print("No valid choices selected. Aborting.")
         return
 
-    output_dir = "Exported_Comparisons"
+    output_dir = os.path.join(BASE_DIR, "Exported_Comparisons")
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"\nProcessing {len(selected_indices)} selected chart(s)...")
