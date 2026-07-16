@@ -1628,6 +1628,10 @@ def plot_transistor(json_path: str) -> None:
 # PLECS XML EXPORT
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# PLECS XML EXPORT
+# ---------------------------------------------------------------------------
+
 PLECS_NS = "http://www.plexim.com/xml/semiconductors/"
 PLECS_VERSION = "1.1"
 
@@ -1638,16 +1642,35 @@ def _fmt_floats(values: list) -> str:
 
 
 def _build_plecs_package(root: ET.Element, data: dict) -> None:
-    """Populate a <Package> element with ConductionLoss, TurnOnLoss,
-    TurnOffLoss and ThermalModel sections from a prepared data dict."""
+    """Populate a <Package> element – section order matches reference:
+    TurnOnLoss → TurnOffLoss → ConductionLoss → ThermalModel → Comment."""
 
     pkg = ET.SubElement(root, "Package",
                         attrib={"class": data["class"],
                                 "vendor": data["vendor"],
                                 "partnumber": data["partnumber"]})
-    ET.SubElement(pkg, "Variables")  # required empty element
+    ET.SubElement(pkg, "Variables")
 
     semi = ET.SubElement(pkg, "SemiconductorData", attrib={"type": data["class"]})
+
+    # ---- TurnOnLoss / TurnOffLoss (before ConductionLoss, matching reference) ----
+    for loss_key in ("TurnOnLoss", "TurnOffLoss"):
+        loss_data = data[loss_key]
+        scale = loss_data.get("energy_scale", "0.001")
+        loss_el = ET.SubElement(semi, loss_key)
+        ET.SubElement(loss_el, "ComputationMethod").text = "Table only"
+        ET.SubElement(loss_el, "CurrentAxis").text = _fmt_floats(loss_data["current_axis"])
+        ET.SubElement(loss_el, "VoltageAxis").text = _fmt_floats(loss_data["voltage_axis"])
+        ET.SubElement(loss_el, "TemperatureAxis").text = _fmt_floats(loss_data["temp_axis"])
+        energy_el = ET.SubElement(loss_el, "Energy", attrib={"scale": scale})
+        for t_idx in range(len(loss_data["temp_axis"])):
+            temp_el = ET.SubElement(energy_el, "Temperature")
+            for v_idx in range(len(loss_data["voltage_axis"])):
+                row = loss_data["energy_table"][t_idx][v_idx]
+                if scale == "0.001":
+                    ET.SubElement(temp_el, "Voltage").text = _fmt_floats([x * 1000 for x in row])
+                else:
+                    ET.SubElement(temp_el, "Voltage").text = _fmt_floats(row)
 
     # ---- ConductionLoss ----
     cond = ET.SubElement(semi, "ConductionLoss")
@@ -1657,23 +1680,6 @@ def _build_plecs_package(root: ET.Element, data: dict) -> None:
     vdrop = ET.SubElement(cond, "VoltageDrop", attrib={"scale": "1"})
     for curve in data["cond"]["curves"]:
         ET.SubElement(vdrop, "Temperature").text = _fmt_floats(curve)
-
-    # ---- TurnOnLoss ----
-    for loss_key in ("TurnOnLoss", "TurnOffLoss"):
-        loss_data = data[loss_key]
-        loss_el = ET.SubElement(semi, loss_key)
-        ET.SubElement(loss_el, "ComputationMethod").text = "Table only"
-        ET.SubElement(loss_el, "CurrentAxis").text = _fmt_floats(loss_data["current_axis"])
-        ET.SubElement(loss_el, "VoltageAxis").text = _fmt_floats(loss_data["voltage_axis"])
-        ET.SubElement(loss_el, "TemperatureAxis").text = _fmt_floats(loss_data["temp_axis"])
-        energy_el = ET.SubElement(loss_el, "Energy", attrib={"scale": "0.001"})
-        # Energy table: [temp_idx][voltage_idx] -> list of energy values per current
-        for t_idx in range(len(loss_data["temp_axis"])):
-            temp_el = ET.SubElement(energy_el, "Temperature")
-            for v_idx in range(len(loss_data["voltage_axis"])):
-                row = loss_data["energy_table"][t_idx][v_idx]
-                # scale=0.001 means values in file are mJ; our data is in J -> multiply by 1000
-                ET.SubElement(temp_el, "Voltage").text = _fmt_floats([x * 1000 for x in row])
 
     # ---- ThermalModel (Foster) ----
     thermal = ET.SubElement(pkg, "ThermalModel")
@@ -1688,11 +1694,16 @@ def _build_plecs_package(root: ET.Element, data: dict) -> None:
         ET.SubElement(comment_el, "Line").text = line
 
 
-def _prepare_conduction_data(channel_list: list) -> dict | None:
-    """Build ConductionLoss dict from switch.channel[] or diode.channel[].
-    Selects curves with graph_v_i, groups by unique t_j.
-    graph_v_i: row0 = V_ce/V_sd [V], row1 = I [A]
-    PLECS ConductionLoss: CurrentAxis = sorted I values, VoltageDrop = V per temperature."""
+def _prepare_conduction_data(channel_list: list, is_mosfet: bool = False) -> dict | None:
+    """
+    Direct port of get_channel_data() from transistordatabase/helper_functions.py.
+
+    Interpolates channel I-V to 20 equally-spaced points from 0 to limit_current.
+    For MOSFETs applies negate_and_append to generate third-quadrant body-diode curve.
+
+    graph_v_i: row0 = V [V], row1 = I [A]
+    """
+    import numpy as np
 
     valid = [ch for ch in channel_list
              if isinstance(ch.get("graph_v_i"), list) and len(ch["graph_v_i"]) == 2
@@ -1700,54 +1711,67 @@ def _prepare_conduction_data(channel_list: list) -> dict | None:
     if not valid:
         return None
 
-    # Use unique t_j values; pick one curve per temperature (first occurrence)
-    seen_tj = {}
+    # limit_current = min of max(|I|) across all curves (matches reference)
+    limit_current = None
     for ch in valid:
-        tj = ch["t_j"]
-        if tj not in seen_tj:
-            seen_tj[tj] = ch
-
-    temp_axis = sorted(seen_tj.keys())
-
-    # Build a common current axis: union of all I values, sorted
-    all_currents = set()
-    for tj in temp_axis:
-        all_currents.update(seen_tj[tj]["graph_v_i"][1])
-    current_axis = sorted(all_currents)
-
-    if not current_axis:
+        i_max = max(abs(i) for i in ch["graph_v_i"][1])
+        if limit_current is None or i_max < limit_current:
+            limit_current = i_max
+    if not limit_current:
         return None
 
-    # Interpolate voltage for each curve at the common current axis
+    interp_current = np.linspace(0, limit_current, 20).tolist()
+    temp_axis = []
     curves = []
-    for tj in temp_axis:
-        vi = seen_tj[tj]["graph_v_i"]
-        i_pts = vi[1]   # current points
-        v_pts = vi[0]   # voltage points
-        # Linear interpolation at common current axis
-        interp_v = []
-        for i_target in current_axis:
-            # find surrounding points
-            if i_target <= i_pts[0]:
-                interp_v.append(v_pts[0])
-            elif i_target >= i_pts[-1]:
-                interp_v.append(v_pts[-1])
-            else:
-                for k in range(len(i_pts) - 1):
-                    if i_pts[k] <= i_target <= i_pts[k + 1]:
-                        frac = (i_target - i_pts[k]) / (i_pts[k + 1] - i_pts[k])
-                        interp_v.append(v_pts[k] + frac * (v_pts[k + 1] - v_pts[k]))
-                        break
+    seen_tj = set()
+
+    for ch in valid:
+        tj = ch["t_j"]
+        if tj in seen_tj:
+            continue
+        seen_tj.add(tj)
+        i_pts = [abs(i) for i in ch["graph_v_i"][1]]
+        v_pts = [abs(v) for v in ch["graph_v_i"][0]]
+        paired = sorted(zip(i_pts, v_pts))
+        i_sorted = [p[0] for p in paired]
+        v_sorted = [p[1] for p in paired]
+        interp_v = np.interp(interp_current, i_sorted, v_sorted).tolist()
+        temp_axis.append(tj)
         curves.append(interp_v)
 
-    return {"current_axis": current_axis, "temp_axis": temp_axis, "curves": curves}
+    if not curves:
+        return None
+
+    # negate_and_append for MOSFETs – port of helper_functions.negate_and_append
+    if is_mosfet:
+        cur_arr = np.array(interp_current)
+        cur_nonzero = cur_arr[cur_arr != 0]
+        cur_neg = (-np.flip(cur_nonzero)).tolist()
+        mirrored_current = cur_neg + interp_current
+
+        mirrored_curves = []
+        for curve in curves:
+            v_arr = np.array(curve)
+            v_nonzero = v_arr[v_arr != 0]
+            v_neg = (-np.flip(v_nonzero)).tolist()
+            mirrored_curves.append(v_neg + curve)
+
+        return {"current_axis": mirrored_current, "temp_axis": temp_axis, "curves": mirrored_curves}
+
+    return {"current_axis": interp_current, "temp_axis": temp_axis, "curves": curves}
 
 
 def _prepare_loss_data(energy_list: list) -> dict | None:
-    """Build TurnOnLoss or TurnOffLoss dict from switch.e_on[] / switch.e_off[] / diode.e_rr[].
-    Selects only dataset_type='graph_i_e' entries.
-    graph_i_e: row0 = I [A], row1 = E [J]
-    PLECS Energy table indexed by [temp_idx][voltage_idx] -> E values per current."""
+    """
+    Direct port of get_loss_curves() from transistordatabase/helper_functions.py.
+
+    Selects graph_i_e curves, interpolates to 20 equally-spaced current points
+    from 0 to limit_current (= min of all curve maxima, matching reference).
+    VoltageAxis always starts with -10 and 0 (zero-energy rows), then data voltages.
+    Energy values are stored internally in J and exported to PLECS as mJ
+    (Energy scale=\"0.001\").
+    """
+    import numpy as np
 
     valid = [e for e in energy_list
              if e.get("dataset_type") == "graph_i_e"
@@ -1757,54 +1781,58 @@ def _prepare_loss_data(energy_list: list) -> dict | None:
     if not valid:
         return None
 
-    # Collect unique temperatures and voltages
-    temp_set = sorted(set(e["t_j"] for e in valid))
-    volt_set = sorted(set(e.get("v_supply", 0) for e in valid))
-
-    # Build common current axis: union of all I axes
-    all_currents = set()
+    # limit_current = min of max(I) across all curves (matches reference)
+    limit_current = None
     for e in valid:
-        all_currents.update(e["graph_i_e"][0])
-    current_axis = sorted(all_currents)
-
-    if not current_axis:
+        i_max = max(e["graph_i_e"][0])
+        if limit_current is None or i_max < limit_current:
+            limit_current = i_max
+    if not limit_current:
         return None
 
-    # energy_table[t_idx][v_idx] = list of E values at current_axis points
+    interp_current = np.linspace(0, limit_current, 20).tolist()
+
+    # Build energy table grouped by v_supply, then t_j
+    # Reference uses dict keyed by v_supply: {v_supply: [[E per current] per t_j]}
+    energy_by_vsupply = {}
+    temp_axis = []
+
+    for e in valid:
+        vs = e.get("v_supply", 0)
+        tj = e["t_j"]
+        i_pts = e["graph_i_e"][0]
+        e_pts = e["graph_i_e"][1]
+        loss_energy = np.interp(interp_current, i_pts, e_pts).tolist()
+
+        if vs not in energy_by_vsupply:
+            energy_by_vsupply[vs] = []
+        energy_by_vsupply[vs].append(loss_energy)
+        if tj not in temp_axis:
+            temp_axis.append(tj)
+
+    # Sort voltage axis; prepend -10 and 0 with zero rows (matches reference)
+    data_voltages = sorted(energy_by_vsupply.keys())
+    n_tj = len(temp_axis)
+    zero_row = [[0.0] * 20] * n_tj
+
+    voltage_axis = [-10, 0] + data_voltages
     energy_table = []
-    for tj in temp_set:
-        row_per_volt = []
-        for vs in volt_set:
-            # find matching entry
-            match = next((e for e in valid
-                          if e["t_j"] == tj and e.get("v_supply", 0) == vs), None)
-            if match:
-                i_pts = match["graph_i_e"][0]
-                e_pts = match["graph_i_e"][1]
-                # interpolate E at common current axis
-                interp_e = []
-                for i_target in current_axis:
-                    if i_target <= i_pts[0]:
-                        interp_e.append(max(0.0, e_pts[0]))
-                    elif i_target >= i_pts[-1]:
-                        interp_e.append(e_pts[-1])
-                    else:
-                        for k in range(len(i_pts) - 1):
-                            if i_pts[k] <= i_target <= i_pts[k + 1]:
-                                frac = (i_target - i_pts[k]) / (i_pts[k + 1] - i_pts[k])
-                                interp_e.append(e_pts[k] + frac * (e_pts[k + 1] - e_pts[k]))
-                                break
-                row_per_volt.append(interp_e)
-            else:
-                # fill with zeros if this (t_j, v_supply) combo is missing
-                row_per_volt.append([0.0] * len(current_axis))
-        energy_table.append(row_per_volt)
+    # energy_table[t_idx][v_idx] indexed as per _build_plecs_package
+    for t_idx in range(n_tj):
+        row = []
+        row.append([0.0] * 20)          # V = -10
+        row.append([0.0] * 20)          # V = 0
+        for vs in data_voltages:
+            e_rows = energy_by_vsupply[vs]
+            row.append(e_rows[t_idx] if t_idx < len(e_rows) else [0.0] * 20)
+        energy_table.append(row)
 
     return {
-        "current_axis": current_axis,
-        "voltage_axis": volt_set,
-        "temp_axis": temp_set,
-        "energy_table": energy_table
+        "current_axis": interp_current,
+        "voltage_axis": voltage_axis,
+        "temp_axis": sorted(temp_axis),
+        "energy_table": energy_table,
+        "energy_scale": "0.001",   # XML values are written in mJ
     }
 
 
@@ -1862,45 +1890,55 @@ def export_plecs_xml(json_path: str, output_dir: str = ".") -> bool:
         print(f"[ERROR] Cannot read JSON file: {e}")
         return False
 
-    name = d.get("name", "Unknown")
+    name         = d.get("name", "Unknown")
     manufacturer = d.get("manufacturer", "Unknown")
-    t_type = d.get("type", "IGBT")
+    t_type       = d.get("type", "IGBT")
+    v_abs_max    = d.get("v_abs_max", 1200)
+    try:
+        v_abs_max = float(v_abs_max)
+    except (TypeError, ValueError):
+        v_abs_max = 1200.0
 
-    # Map our type strings to PLECS class names
     plecs_class_map = {
         "IGBT": "IGBT", "SiC-MOSFET": "MOSFET",
         "Si-MOSFET": "MOSFET", "GaN-Transistor": "MOSFET",
         "MOSFET": "MOSFET"
     }
     switch_class = plecs_class_map.get(t_type, "IGBT")
+    is_mosfet    = (switch_class == "MOSFET")
 
     sw = d.get("switch", {})
-    di = d.get("diode", {})
+    di = d.get("diode",  {})
 
-    # ---- Switch: ConductionLoss ----
-    sw_cond = _prepare_conduction_data(sw.get("channel", []))
+    # ---- Switch: ConductionLoss (pass is_mosfet for negate_and_append) ----
+    sw_cond = _prepare_conduction_data(sw.get("channel", []), is_mosfet=is_mosfet)
     if sw_cond is None:
         print(f"[ERROR] '{name}': switch.channel has no usable graph_v_i data. Cannot export.")
         return False
 
-    # ---- Switch: TurnOnLoss / TurnOffLoss ----
-    sw_on = _prepare_loss_data(sw.get("e_on", []))
-    sw_off = _prepare_loss_data(sw.get("e_off", []))
+    # ---- Zero-energy fallback matching reference: VoltageAxis = [-10, 0, v_abs_max] ----
+    def _zero_loss(cond):
+        n = len(cond["current_axis"])
+        return {
+            "current_axis": cond["current_axis"],
+            "voltage_axis": [-10, 0, v_abs_max],
+            "temp_axis":    cond["temp_axis"],
+            "energy_scale": "0.001",
+            "energy_table": [
+                [[0.0]*n, [0.0]*n, [0.0]*n]
+                for _ in cond["temp_axis"]
+            ],
+        }
 
-    # If energy data is absent: generate zero-filled table matching ConductionLoss axes
-    zero_energy = {
-        "current_axis": sw_cond["current_axis"],
-        "voltage_axis": [0.0],
-        "temp_axis": sw_cond["temp_axis"],
-        "energy_table": [[[0.0] * len(sw_cond["current_axis"])]
-                          for _ in sw_cond["temp_axis"]]
-    }
+    # ---- Switch: TurnOnLoss / TurnOffLoss ----
+    sw_on  = _prepare_loss_data(sw.get("e_on",  []))
+    sw_off = _prepare_loss_data(sw.get("e_off", []))
     if sw_on is None:
         print(f"[INFO] '{name}': no switch e_on data – zero table will be used.")
-        sw_on = zero_energy
+        sw_on = _zero_loss(sw_cond)
     if sw_off is None:
         print(f"[INFO] '{name}': no switch e_off data – zero table will be used.")
-        sw_off = zero_energy
+        sw_off = _zero_loss(sw_cond)
 
     # ---- Switch: ThermalModel ----
     sw_foster = _prepare_foster(sw.get("thermal_foster", {}))
@@ -1908,64 +1946,47 @@ def export_plecs_xml(json_path: str, output_dir: str = ".") -> bool:
         print(f"[INFO] '{name}': no switch Foster data – single R=0/Tau=0 element used.")
         sw_foster = {"r_vec": [0.0], "tau_vec": [0.0]}
 
-    # ---- Diode: ConductionLoss ----
-    di_cond = _prepare_conduction_data(di.get("channel", []))
+    # ---- Diode: ConductionLoss (diode is not a MOSFET – no mirroring) ----
+    di_cond = _prepare_conduction_data(di.get("channel", []), is_mosfet=False)
     if di_cond is None:
         print(f"[WARNING] '{name}': diode.channel has no usable data. Diode XML will be skipped.")
-        di_cond = None
 
-    # ---- Diode: TurnOffLoss (e_rr = reverse recovery) ----
+    # ---- Diode: TurnOffLoss (e_rr) and TurnOnLoss (always zero per reference) ----
     di_off = _prepare_loss_data(di.get("e_rr", []))
-    di_on_zero = None  # diode TurnOnLoss is always zeros in PLECS convention
 
-    # ---- Build comment lines ----
-    today = datetime.date.today().isoformat()
+    # ---- Comment matching reference style ----
+    import datetime as _dt
     comment_lines = [
-        f"Exported from transistor database by szukaj.py on {today}",
-        f"Manufacturer: {manufacturer}",
-        f"Part number: {name}",
-        f"Type: {t_type}",
+        f"This datasheet was created by {d.get('author', 'unknown')} on "
+        f"{d.get('datasheet_date', '')} and was exported using transistordatabase.",
+        f"Datasheet Link : {d.get('datasheet_hyperlink', '')}",
+        f"File generated : {_dt.datetime.now()}",
+        "File generated by : szukaj.py",
     ]
-    if d.get("datasheet_hyperlink"):
-        comment_lines.append(f"Datasheet: {d['datasheet_hyperlink']}")
 
     os.makedirs(output_dir, exist_ok=True)
 
     # ---- Write switch XML ----
     switch_data = {
-        "class": switch_class,
-        "vendor": manufacturer,
-        "partnumber": name,
-        "cond": sw_cond,
-        "TurnOnLoss": sw_on,
-        "TurnOffLoss": sw_off,
-        "foster": sw_foster,
+        "class":         switch_class,
+        "vendor":        manufacturer,
+        "partnumber":    name,
+        "cond":          sw_cond,
+        "TurnOnLoss":    sw_on,
+        "TurnOffLoss":   sw_off,
+        "foster":        sw_foster,
         "comment_lines": comment_lines,
     }
-    # For MOSFETs: PLECS expects negative-current mirror in ConductionLoss
-    # (body diode conducts in reverse). We replicate by negating current axis.
-    if switch_class == "MOSFET":
-        mirrored_currents = [-c for c in reversed(sw_cond["current_axis"])] + sw_cond["current_axis"]
-        mirrored_curves = []
-        for curve in sw_cond["curves"]:
-            mirrored_curves.append(list(reversed(curve)) + curve)
-        switch_data["cond"] = {
-            "current_axis": mirrored_currents,
-            "temp_axis": sw_cond["temp_axis"],
-            "curves": mirrored_curves
-        }
 
-    NSMAP = {"xmlns": PLECS_NS}
     sw_root = ET.Element("SemiconductorLibrary",
                          attrib={"xmlns": PLECS_NS, "version": PLECS_VERSION})
+    ET.register_namespace("", PLECS_NS)
     _build_plecs_package(sw_root, switch_data)
     _indent_xml(sw_root)
 
     sw_path = os.path.join(output_dir, f"{name}_switch.xml")
-    tree = ET.ElementTree(sw_root)
-    ET.register_namespace("", PLECS_NS)
-    with open(sw_path, "w", encoding="ISO-8859-1") as fh:
-        fh.write('<?xml version="1.0" encoding="ISO-8859-1"?>\n')
+    with open(sw_path, "w", encoding="utf-8") as fh:
+        fh.write('<?xml version="1.0" encoding="UTF-8"?>\n')
         fh.write(ET.tostring(sw_root, encoding="unicode"))
     print(f"  [SUCCESS] Switch XML: {os.path.normpath(sw_path)}")
 
@@ -1975,36 +1996,29 @@ def export_plecs_xml(json_path: str, output_dir: str = ".") -> bool:
         if di_foster is None:
             di_foster = {"r_vec": [0.0], "tau_vec": [0.0]}
 
-        di_zero_energy = {
-            "current_axis": di_cond["current_axis"],
-            "voltage_axis": [0.0],
-            "temp_axis": di_cond["temp_axis"],
-            "energy_table": [[[0.0] * len(di_cond["current_axis"])]
-                              for _ in di_cond["temp_axis"]]
-        }
-        if di_on_zero is None:
-            di_on_zero = di_zero_energy
+        di_on_zero = _zero_loss(di_cond)
         if di_off is None:
-            di_off = di_zero_energy
+            di_off = _zero_loss(di_cond)
 
         diode_data = {
-            "class": "Diode",
-            "vendor": manufacturer,
-            "partnumber": name,
-            "cond": di_cond,
-            "TurnOnLoss": di_on_zero,
-            "TurnOffLoss": di_off,
-            "foster": di_foster,
+            "class":         "Diode",
+            "vendor":        manufacturer,
+            "partnumber":    name,
+            "cond":          di_cond,
+            "TurnOnLoss":    di_on_zero,
+            "TurnOffLoss":   di_off,
+            "foster":        di_foster,
             "comment_lines": comment_lines,
         }
         di_root = ET.Element("SemiconductorLibrary",
                              attrib={"xmlns": PLECS_NS, "version": PLECS_VERSION})
+        ET.register_namespace("", PLECS_NS)
         _build_plecs_package(di_root, diode_data)
         _indent_xml(di_root)
 
         di_path = os.path.join(output_dir, f"{name}_diode.xml")
-        with open(di_path, "w", encoding="ISO-8859-1") as fh:
-            fh.write('<?xml version="1.0" encoding="ISO-8859-1"?>\n')
+        with open(di_path, "w", encoding="utf-8") as fh:
+            fh.write('<?xml version="1.0" encoding="UTF-8"?>\n')
             fh.write(ET.tostring(di_root, encoding="unicode"))
         print(f"  [SUCCESS] Diode XML:  {os.path.normpath(di_path)}")
     else:
@@ -2315,7 +2329,7 @@ def _run_converter_cli(df):
         import numpy as np
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from converters.core import ConverterDevice, ConverterError
-        from converters.analysis import ConverterParams, run_loss_map
+        from converters.analysis import run_loss_map
     except ImportError as e:
         print(f"[ERROR] converters package not found: {e}")
         print("  Make sure the 'converters/' folder is in the same directory as szukaj.py.")
@@ -2371,15 +2385,22 @@ def _run_converter_cli(df):
         except: return int(default)
 
     print("\n--- Operating parameters (Enter = use default) ---")
-    params = ConverterParams(
+    # NOTE: converters/analysis.py's run_loss_map() expects a "params_legacy"
+    # object with these exact attributes (see its docstring) — it is NOT the
+    # new ConverterParams dataclass (which uses v_in/v_in_min/v_in_max, no
+    # v_in_range tuple, and no 'inductance' field at all, only 'zeta').
+    from types import SimpleNamespace
+    params = SimpleNamespace(
         v_out         = _f("V_out [V]",           400),
         v_in_range    = (_f("V_in min [V]",        200),
                          _f("V_in max [V]",        800)),
         p_out_range   = (_f("P_out min [W]",       500),
                          _f("P_out max [W]",      10000)),
         frequency     = _f("Frequency [Hz]",     10000),
-        inductance    = _f("Inductance [H]",      1e-3),
+        zeta          = _f("Zeta = f*L [-]",         5),
         v_g_on        = _f("V_g_on [V]",           15),
+        r_g_on        = _f("R_g_on [Ω] (0 = datasheet nominal)",  0),
+        r_g_off       = _f("R_g_off [Ω] (0 = datasheet nominal)", 0),
         t_heatsink    = _f("T_heatsink [°C]",       50),
         r_th_heatsink = _f("Rth_heatsink [K/W]",   0.1),
         n_points      = _i("Grid points",           40),
