@@ -1,0 +1,333 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="3a921a11-ad35-4af2-8bad-7c03ce9551da" name="Changes" comment="naprawiony_plecsv2" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="CopilotPersistence">
+    <persistenceIdMap>
+      <entry key="_C:/Users/milos/OneDrive/Dokumenty/TwojaStara/TransistorDataBase" value="3FtVlA0qpMItnMFSYtKWf1KYtXq" />
+      <entry key="_D:/szukaj" value="3FU5j6Z47xdBTAGCyvFGEUKkW0o" />
+    </persistenceIdMap>
+  </component>
+  <component name="EmbeddingIndexingInfo">
+    <option name="cachedIndexableFilesCount" value="98" />
+  </component>
+  <component name="Git.Merge.Settings">
+    <option name="BRANCH" value="origin/main" />
+  </component>
+  <component name="Git.Settings">
+    <favorite-branches>
+      <branch-storage>
+        <map>
+          <entry type="LOCAL">
+            <value>
+              <list>
+                <branch-info repo="$PROJECT_DIR$" source="M" />
+              </list>
+            </value>
+          </entry>
+        </map>
+      </branch-storage>
+    </favorite-branches>
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="M" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="UPDATE_TYPE" value="REBASE" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;Szmit02&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/Skrzacik04/TransistorDataBase.git&quot;,
+    &quot;accountId&quot;: &quot;dac57b33-dcaf-455d-b072-6cf575500d56&quot;
+  },
+  &quot;recentNewPullRequestHead&quot;: {
+    &quot;server&quot;: {
+      &quot;useHttp&quot;: false,
+      &quot;host&quot;: &quot;github.com&quot;,
+      &quot;port&quot;: null,
+      &quot;suffix&quot;: null
+    },
+    &quot;owner&quot;: &quot;Skrzacik04&quot;,
+    &quot;repository&quot;: &quot;TransistorDataBase&quot;
+  }
+}</component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="file://$PROJECT_DIR$/szukaj.py" root0="FORCE_HIGHLIGHTING" />
+  </component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="1.0000000001071239" />
+      <entry key="MS500" value="1.0101385841167123" />
+      <entry key="S2" value="1.3173177220597054" />
+      <entry key="S5" value="1.6326619860141252" />
+      <entry key="S10" value="1.9429236893439248" />
+      <entry key="S30" value="7.8256839165681535" />
+      <entry key="S60" value="17.496309899687777" />
+      <entry key="M2" value="28.798504207755037" />
+      <entry key="M5" value="70.7651418736577" />
+      <entry key="M10" value="172.83433716375734" />
+      <entry key="M15" value="264.1438103495305" />
+      <entry key="M30" value="435.8589747895871" />
+      <entry key="H1" value="577.5481311111892" />
+      <entry key="H2" value="670.2147785562358" />
+      <entry key="H4" value="723.4584457786873" />
+      <entry key="D1" value="771.8506725920597" />
+      <entry key="W1" value="780.5401484015325" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="0.0" />
+      <entry key="S60" value="0.0" />
+      <entry key="M2" value="0.0" />
+      <entry key="M5" value="0.0" />
+      <entry key="M10" value="0.0" />
+      <entry key="M15" value="0.0" />
+      <entry key="M30" value="0.0" />
+      <entry key="H1" value="0.0" />
+      <entry key="H2" value="0.0" />
+      <entry key="H4" value="0.0" />
+      <entry key="D1" value="0.0" />
+      <entry key="W1" value="0.0" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="0.9592641194273147" />
+      <entry key="MS500" value="1.0017574052497729" />
+      <entry key="S2" value="1.3144715565034046" />
+      <entry key="S5" value="1.6312169521621047" />
+      <entry key="S10" value="1.942052494968905" />
+      <entry key="S30" value="7.824456540020017" />
+      <entry key="S60" value="17.494910219298422" />
+      <entry key="M2" value="28.797254907691684" />
+      <entry key="M5" value="70.7627992204339" />
+      <entry key="M10" value="172.8302993999711" />
+      <entry key="M15" value="264.13916764664816" />
+      <entry key="M30" value="435.85463165709837" />
+      <entry key="H1" value="577.5450667350113" />
+      <entry key="H2" value="670.212944639138" />
+      <entry key="H4" value="723.4574407492925" />
+      <entry key="D1" value="771.8504916187142" />
+      <entry key="W1" value="780.5401222010031" />
+    </decayedShown>
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 3,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3FU5j6Z47xdBTAGCyvFGEUKkW0o" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python.GUI.executor": "Run",
+    "Python.Owszem.executor": "Run",
+    "Python.szukaj.executor": "Run",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "copilot.chat.legacySessionMetadata.migrated": "true",
+    "git-widget-placeholder": "main",
+    "git.auto.fetch.suggestion.counter": "3",
+    "ignore.virus.scanning.warn.message": "true",
+    "last_opened_file_path": "D:/szukaj",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="RunManager">
+    <configuration name="GUI" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="SDK_NAME" value="Python 3.10 (transistordatabase-main) (2)" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="DEBUG_JUST_MY_CODE" value="false" />
+      <module name="" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/GUI.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-c59985aa861c-c2ffad84badb-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-261.24374.152" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="3a921a11-ad35-4af2-8bad-7c03ce9551da" name="Changes" comment="" />
+      <created>1782116941419</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1782116941419</updated>
+      <workItem from="1782116942483" duration="5340000" />
+      <workItem from="1782129301605" duration="788000" />
+      <workItem from="1782202803089" duration="9040000" />
+      <workItem from="1782290075040" duration="3000" />
+      <workItem from="1782291928986" duration="568000" />
+      <workItem from="1782292585584" duration="1207000" />
+      <workItem from="1782297778373" duration="1809000" />
+      <workItem from="1782373502020" duration="3686000" />
+      <workItem from="1782383619699" duration="5801000" />
+      <workItem from="1782458785699" duration="3379000" />
+      <workItem from="1782721804378" duration="147000" />
+      <workItem from="1782721967790" duration="209000" />
+      <workItem from="1782722276641" duration="1575000" />
+      <workItem from="1782804756236" duration="8000" />
+      <workItem from="1782894508511" duration="755000" />
+      <workItem from="1782895537932" duration="210000" />
+      <workItem from="1782895765367" duration="2617000" />
+      <workItem from="1782898488549" duration="1323000" />
+      <workItem from="1782899858512" duration="2116000" />
+      <workItem from="1782982658342" duration="245000" />
+      <workItem from="1782982932045" duration="3210000" />
+      <workItem from="1782986246400" duration="2202000" />
+      <workItem from="1783067231375" duration="3076000" />
+      <workItem from="1783070362778" duration="243000" />
+      <workItem from="1783070652873" duration="2923000" />
+      <workItem from="1784107459488" duration="33000" />
+    </task>
+    <task id="LOCAL-00001" summary="nwmczytodzialapoprawnie">
+      <option name="closed" value="true" />
+      <created>1782988314075</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1782988314075</updated>
+    </task>
+    <task id="LOCAL-00002" summary="ChybaJestGit">
+      <option name="closed" value="true" />
+      <created>1783070242997</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1783070242998</updated>
+    </task>
+    <task id="LOCAL-00003" summary="naprawiony_plecs">
+      <option name="closed" value="true" />
+      <created>1784192743108</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1784192743108</updated>
+    </task>
+    <task id="LOCAL-00004" summary="naprawiony_plecsv2">
+      <option name="closed" value="true" />
+      <created>1784193006401</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1784193006401</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="RECENT_FILTERS">
+      <map>
+        <entry key="User">
+          <value>
+            <list>
+              <RecentGroup>
+                <option name="FILTER_VALUES">
+                  <option value="*" />
+                </option>
+              </RecentGroup>
+            </list>
+          </value>
+        </entry>
+      </map>
+    </option>
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="nwmczytodzialapoprawnie" />
+    <MESSAGE value="ChybaJestGit" />
+    <MESSAGE value="naprawiony_plecs" />
+    <MESSAGE value="naprawiony_plecsv2" />
+    <option name="LAST_COMMIT_MESSAGE" value="naprawiony_plecsv2" />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/szukaj.py</url>
+          <line>2678</line>
+          <option name="timeStamp" value="1" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/szukaj.py</url>
+          <line>293</line>
+          <option name="timeStamp" value="2" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
+  </component>
+  <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/szukaj$Owszem.coverage" NAME="Owszem Coverage Results" MODIFIED="1782203515891" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/szukaj$szukaj.coverage" NAME="szukaj Coverage Results" MODIFIED="1782723124390" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/szukaj$GUI.coverage" NAME="GUI Coverage Results" MODIFIED="1782723432798" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/TransistorDataBase$GUI.coverage" NAME="GUI Coverage Results" MODIFIED="1783071187541" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/GUI_py$GUI.coverage" NAME="GUI Coverage Results" MODIFIED="1782807181496" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/GUI_py$szukaj.coverage" NAME="szukaj Coverage Results" MODIFIED="1782806531925" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+  </component>
+</project>
