@@ -1628,6 +1628,10 @@ def plot_transistor(json_path: str) -> None:
 # PLECS XML EXPORT
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# PLECS XML EXPORT
+# ---------------------------------------------------------------------------
+
 PLECS_NS = "http://www.plexim.com/xml/semiconductors/"
 PLECS_VERSION = "1.1"
 
@@ -2325,7 +2329,7 @@ def _run_converter_cli(df):
         import numpy as np
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from converters.core import ConverterDevice, ConverterError
-        from converters.analysis import ConverterParams, run_loss_map
+        from converters.analysis import run_loss_map
     except ImportError as e:
         print(f"[ERROR] converters package not found: {e}")
         print("  Make sure the 'converters/' folder is in the same directory as szukaj.py.")
@@ -2381,15 +2385,22 @@ def _run_converter_cli(df):
         except: return int(default)
 
     print("\n--- Operating parameters (Enter = use default) ---")
-    params = ConverterParams(
+    # NOTE: converters/analysis.py's run_loss_map() expects a "params_legacy"
+    # object with these exact attributes (see its docstring) — it is NOT the
+    # new ConverterParams dataclass (which uses v_in/v_in_min/v_in_max, no
+    # v_in_range tuple, and no 'inductance' field at all, only 'zeta').
+    from types import SimpleNamespace
+    params = SimpleNamespace(
         v_out         = _f("V_out [V]",           400),
         v_in_range    = (_f("V_in min [V]",        200),
                          _f("V_in max [V]",        800)),
         p_out_range   = (_f("P_out min [W]",       500),
                          _f("P_out max [W]",      10000)),
         frequency     = _f("Frequency [Hz]",     10000),
-        inductance    = _f("Inductance [H]",      1e-3),
+        zeta          = _f("Zeta = f*L [-]",         5),
         v_g_on        = _f("V_g_on [V]",           15),
+        r_g_on        = _f("R_g_on [Ω] (0 = datasheet nominal)",  0),
+        r_g_off       = _f("R_g_off [Ω] (0 = datasheet nominal)", 0),
         t_heatsink    = _f("T_heatsink [°C]",       50),
         r_th_heatsink = _f("Rth_heatsink [K/W]",   0.1),
         n_points      = _i("Grid points",           40),
