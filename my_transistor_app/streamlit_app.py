@@ -11,7 +11,49 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 from typing import Optional
+
+# ---------------------------------------------------------------------------
+# Make the project root (one level up, where transistordatabase/ lives)
+# importable, WITHOUT relying on the PYTHONPATH environment variable.
+#
+# Why: newer Streamlit versions run the app script inside a Uvicorn-managed
+# worker process (multiprocessing "spawn" on Windows). That worker does not
+# reliably inherit PYTHONPATH set by the launching process/shell, even
+# though the launcher process itself sees it fine. Setting sys.path
+# directly here executes inside the SAME process that actually runs this
+# script, so it works regardless of how that process was spawned.
+# ---------------------------------------------------------------------------
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+# ---------------------------------------------------------------------------
+# DIAGNOSTIC: write ground-truth facts about THIS exact process to a file,
+# before attempting the imports that have been failing. This removes all
+# guessing about which interpreter/site-packages this specific worker
+# process actually uses - we read it directly from the process itself.
+# Safe to remove once the underlying issue is confirmed and fixed.
+# ---------------------------------------------------------------------------
+try:
+    import importlib.util as _ilu
+    _diag_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime_diagnostics.log")
+    with open(_diag_path, "w", encoding="utf-8") as _f:
+        _f.write(f"sys.executable = {sys.executable}\n")
+        _f.write(f"sys.version = {sys.version}\n")
+        _f.write(f"os.getcwd() = {os.getcwd()}\n")
+        _f.write(f"_PROJECT_ROOT = {_PROJECT_ROOT}\n")
+        _f.write(f"PYTHONPATH env = {os.environ.get('PYTHONPATH', '<not set>')}\n")
+        _f.write("sys.path =\n")
+        for _p in sys.path:
+            _f.write(f"    {_p}\n")
+        _pymongo_spec = _ilu.find_spec("pymongo")
+        _f.write(f"pymongo find_spec = {_pymongo_spec}\n")
+        _f.write(f"transistordatabase find_spec = {_ilu.find_spec('transistordatabase')}\n")
+except Exception as _diag_err:
+    # If even the diagnostic write fails, don't block the app - just note it.
+    print(f"[diagnostic write failed] {_diag_err}", file=sys.stderr)
 
 import pandas as pd
 import plotly.graph_objects as go

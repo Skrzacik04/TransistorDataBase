@@ -685,7 +685,7 @@ class TransistorGUI:
         ttk.Button(tb, text="📋 Copy All (TSV)", command=self._profile_copy_all).pack(side="right", padx=4)
         ttk.Button(tb, text="📊 Add to Compare", command=self._profile_add_compare).pack(side="right", padx=4)
         ttk.Button(tb, text="✏️  Open in Editor", command=self._profile_open_editor).pack(side="right", padx=4)
-        ttk.Button(tb, text="📤 Load into Export Tool", command=self._profile_export).pack(side="right", padx=4)
+        ttk.Button(tb, text="📤 Export this device", command=self._profile_export).pack(side="right", padx=4)
 
         pane = ttk.PanedWindow(p, orient="vertical")
         pane.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
@@ -832,10 +832,8 @@ class TransistorGUI:
     def _profile_export(self):
         if self._profile_row is None: return
         name = str(self._profile_row.get("name",""))
-        if hasattr(self, "_export_combo"):
-            self._export_combo.set(name)
-        self.nb.select(self.tab_export)
-        self.status.config(text=f"Loaded '{name}' into Export tool.")
+        sub  = self.df[self.df["name"]==name]
+        if not sub.empty: self._do_export_df(sub)
 
     # ==================================================================
     # COMPARE TAB  – koszyk tranzystorów, wykresy obok siebie
