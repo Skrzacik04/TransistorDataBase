@@ -205,7 +205,7 @@ def _calc_channel(m_i, v_g_on1, t1, t2):
         else:
             vc2d[i], rc2d[i] = vc2d[i-1], rc2d[i-1]
         vc1[i] = rc1s[i]*ic + vc1s[i]
-        vc2[i] = vc2d[i]
+        vc2[i] = rc2d[i]*ic + vc2d[i]   # fix: V_diode = V_0 + R*I, not just V_0
 
     ok = ~np.isnan(m_i)
     def interp(src): return np.where(ok, np.interp(np.where(ok, m_i, 0), vec, src), 0.0)
@@ -275,7 +275,7 @@ def _compute_all(F, zeta, v_in, v_out, p_out, freq_hz,
     # -- i_peak + converged channel voltages --
     ip, vc1, vc2 = _i_peak(F, zeta, v_in, v_out, p_out, v_g_on1, t1, t2)
     ch = _calc_channel(ip, v_g_on1, t1, t2)
-    rc1s = ch[2]; vc1s_lin = ch[3]; vc2d = ch[4]
+    rc1s = ch[2]; vc1s_lin = ch[3]; vc2d = ch[4]; rc2d_lin = ch[5]
 
     d_ccm  = F["duty_ccm"](v_in, v_out, vc1, vc2)
     d_dcm1 = F["duty_dcm"](zeta, v_in, v_out, p_out, vc1, vc2)
@@ -316,7 +316,7 @@ def _compute_all(F, zeta, v_in, v_out, p_out, freq_hz,
 
     # Conduction losses
     cond1 = i1_rms**2 * rc1s + i1_mean * vc1s_lin
-    cond2 = i2_rms * vc2d
+    cond2 = i2_rms**2 * rc2d_lin + i2_mean * vc2d   # fix: was I_rms*V_0, now R*I_rms²+V_0*I_mean
 
     # Switching currents
     i_on1  = np.where(is_ccm, np.maximum(i_min, 0.0), 0.0)   # turn-on = i_min_ccm / 0 in DCM

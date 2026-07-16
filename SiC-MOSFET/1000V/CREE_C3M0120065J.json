@@ -1,0 +1,9 @@
+{
+    "name": "CREE_C3M0120065J",
+    "type": "SiC-MOSFET",
+    "technology": "SiC-MOSFET",
+    "v_abs_max": "1000",
+    "manufacturer": "",
+    "author": "PLECS import",
+    "diode_source_file": "CREE_C3M0120065J"
+}
