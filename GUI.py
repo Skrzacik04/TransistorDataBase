@@ -4,7 +4,7 @@ All data operations are delegated to functions from szukaj.py.
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import os, json, datetime, sys, csv, subprocess, copy
+import os, json, datetime, sys, csv, subprocess
 import xml.etree.ElementTree as ET
 import pandas as pd
 import importlib.util
@@ -33,23 +33,6 @@ import_ready_json_file      = _szukaj.import_ready_json_file
 deep_search_charts          = _szukaj.deep_search_charts
 build_structured_json       = _szukaj.build_structured_json
 FIELD_META                  = _szukaj.FIELD_META
-
-# ---------------------------------------------------------------------------
-# curve_schemas.py - poprawne schematy pól-krzywych (naprawa importu CSV)
-# ---------------------------------------------------------------------------
-_cs_spec = importlib.util.spec_from_file_location("curve_schemas", os.path.join(_THIS_DIR, "curve_schemas.py"))
-_curve_schemas = importlib.util.module_from_spec(_cs_spec)
-_cs_spec.loader.exec_module(_curve_schemas)
-
-CURVE_SCHEMAS         = _curve_schemas.CURVE_SCHEMAS
-SCALAR_GROUP_FIELDS   = _curve_schemas.SCALAR_GROUP_FIELDS
-NON_CURVE_SCALAR_KEYS = _curve_schemas.NON_CURVE_SCALAR_KEYS
-DYNAMIC_GRAPH_KEY_MAP = _curve_schemas.DYNAMIC_GRAPH_KEY_MAP
-csv_to_graph_array    = _curve_schemas.csv_to_graph_array
-get_nested            = _curve_schemas.get_nested
-set_nested            = _curve_schemas.set_nested
-empty_container       = _curve_schemas.empty_container
-describe_dataset      = _curve_schemas.describe_dataset
 
 # ---------------------------------------------------------------------------
 # Converters package (optional – graceful fallback if folder missing)
@@ -116,10 +99,6 @@ def _get_axis_labels(chart_key: str):
 # HELPER: detecting fields with curves
 # ============================================================================
 def is_curve_field(fn):
-    if fn in NON_CURVE_SCALAR_KEYS:
-        # c_oss_er / c_oss_tr i ich składowe (c_o, v_ds, v_gs) to same skalary
-        # (klasa EffectiveOutputCapacitance) - nie są to zestawy krzywych.
-        return False
     return (fn.startswith("graph_") or fn.startswith("diode_") or
             fn.startswith("switch_") or fn.startswith("c_")) \
         and not fn.endswith("_fix") \
@@ -210,254 +189,6 @@ def open_chart_popup(parent, title, curves, chart_key=""):
 
     cv.mpl_connect("motion_notify_event", _on_move)
     win.protocol("WM_DELETE_WINDOW", lambda: (plt.close(fig), win.destroy()))
-
-# ============================================================================
-# CURVE IMPORT FIX: AddDatasetDialog + CurveManagerDialog
-# ----------------------------------------------------------------------------
-# Poprawny mechanizm importu CSV dla pól-krzywych (channel, e_on, e_off, soa,
-# charge_curve, r_channel_th, linearized_switch/diode, thermal_foster,
-# c_iss/c_oss/c_rss, graph_v_ecoss).
-#
-# Naprawia trzy błędy poprzedniej wersji:
-#   1. Dane trafiały do płaskiego klucza (np. "switch_channel") zamiast do
-#      zagnieżdżonej ścieżki (switch.channel) - patrz curve_schemas.py.
-#   2. CSV zapisywany był jako lista par punktów, a nie transponowana
-#      tablica [[X...],[Y...]] wymagana przez bibliotekę.
-#   3. Brak metadanych (t_j, v_g, r_g, dataset_type...) opisujących, do
-#      którego zestawu należy dana krzywa.
-# ============================================================================
-class AddDatasetDialog(tk.Toplevel):
-    """Okno dodawania JEDNEGO zestawu danych (metadane + opcjonalny CSV)
-    dla pola-krzywej opisanego w CURVE_SCHEMAS."""
-
-    def __init__(self, parent, field_key, schema, initial=None, on_ok=None):
-        super().__init__(parent)
-        self.field_key = field_key
-        self.schema = schema
-        self.on_ok = on_ok
-        self.result = None
-        self._csv_array = None          # [[X...],[Y...]] po wczytaniu CSV
-        self._csv_path_var = tk.StringVar(value="")
-        self.title(f"Dodaj zestaw danych – {field_key}")
-        self.resizable(False, False)
-        self.grab_set()
-
-        initial = initial or {}
-        self._vars = {}
-
-        frm = ttk.Frame(self, padding=10)
-        frm.pack(fill="both", expand=True)
-
-        row = 0
-        ttk.Label(frm, text=f"Pole: {field_key}", font=("Arial", 9, "bold")).grid(
-            row=row, column=0, columnspan=3, sticky="w", pady=(0, 8)); row += 1
-
-        # --- pola metadanych (dynamicznie wg schematu) ----------------------
-        for name, kind, required in schema.get("metadata", []):
-            label = name + (" *" if required else "")
-            ttk.Label(frm, text=label).grid(row=row, column=0, sticky="w", pady=2)
-            if kind.startswith("choice:"):
-                options = kind.split(":", 1)[1].split(",")
-                var = tk.StringVar(value=str(initial.get(name, options[0])))
-                cb = ttk.Combobox(frm, textvariable=var, values=options,
-                                   state="readonly", width=20)
-                cb.grid(row=row, column=1, sticky="w", pady=2)
-                if name == "dataset_type" and schema.get("graph_key") == "dynamic":
-                    cb.bind("<<ComboboxSelected>>", lambda e: self._refresh_csv_row())
-            else:
-                var = tk.StringVar(value=str(initial.get(name, "")) if initial.get(name) is not None else "")
-                ttk.Entry(frm, textvariable=var, width=22).grid(row=row, column=1, sticky="w", pady=2)
-            self._vars[name] = var
-            row += 1
-
-        # --- wiersz CSV (jeśli pole wymaga krzywej) -------------------------
-        self._frm = frm
-        self._csv_row_index = row
-        self._csv_label = ttk.Label(frm, text="(brak pliku)", foreground="gray")
-        self._csv_button = ttk.Button(frm, text="📁 Wybierz CSV (X;Y)…", command=self._pick_csv)
-        self._initial = initial
-        self._refresh_csv_row()
-        row += 1
-
-        btns = ttk.Frame(frm)
-        btns.grid(row=row, column=0, columnspan=3, pady=(12, 0), sticky="e")
-        ttk.Button(btns, text="Anuluj", command=self.destroy).pack(side="right", padx=4)
-        ttk.Button(btns, text="OK", command=self._on_ok).pack(side="right", padx=4)
-
-    def _current_graph_key(self):
-        gk = self.schema.get("graph_key")
-        if gk == "dynamic":
-            ds_type = self._vars.get("dataset_type")
-            ds_type = ds_type.get() if ds_type else None
-            return DYNAMIC_GRAPH_KEY_MAP.get(ds_type)
-        return gk
-
-    def _refresh_csv_row(self):
-        gk = self._current_graph_key()
-        self._csv_button.grid_forget()
-        self._csv_label.grid_forget()
-        if gk is None:
-            return  # to pole / ten dataset_type nie wymaga żadnej krzywej
-        self._csv_button.grid(row=self._csv_row_index, column=0, sticky="w", pady=6)
-        if self._initial and isinstance(self._initial.get(gk), list) and len(self._initial[gk]) == 2:
-            n = len(self._initial[gk][0])
-            self._csv_label.config(text=f"✅ istniejące dane ({n} pkt) – wybierz plik, aby zamienić",
-                                    foreground="green")
-        self._csv_label.grid(row=self._csv_row_index, column=1, columnspan=2, sticky="w", pady=6)
-
-    def _pick_csv(self):
-        fp = filedialog.askopenfilename(title="Wybierz plik CSV (kolumny X;Y)",
-                                         filetypes=[("CSV", "*.csv"), ("Wszystkie pliki", "*.*")])
-        if not fp:
-            return
-        try:
-            self._csv_array = csv_to_graph_array(fp)
-            n = len(self._csv_array[0])
-            self._csv_path_var.set(fp)
-            self._csv_label.config(text=f"✅ {os.path.basename(fp)} ({n} pkt)", foreground="green")
-        except Exception as ex:
-            messagebox.showerror("Błąd wczytywania CSV", str(ex))
-
-    def _on_ok(self):
-        obj = {}
-        for name, kind, required in self.schema.get("metadata", []):
-            raw = self._vars[name].get().strip()
-            if kind == "float":
-                if raw == "":
-                    if required:
-                        messagebox.showerror("Błąd", f"Pole '{name}' jest wymagane.")
-                        return
-                    obj[name] = None
-                else:
-                    try:
-                        obj[name] = float(raw)
-                    except ValueError:
-                        messagebox.showerror("Błąd", f"Pole '{name}' musi być liczbą.")
-                        return
-            else:
-                if required and raw == "":
-                    messagebox.showerror("Błąd", f"Pole '{name}' jest wymagane.")
-                    return
-                obj[name] = raw if raw != "" else None
-
-        gk = self._current_graph_key()
-        if gk is not None:
-            if self._csv_array is None:
-                messagebox.showerror("Błąd", "To pole wymaga krzywej – wybierz plik CSV.")
-                return
-            obj[gk] = self._csv_array
-
-        self.result = obj
-        if self.on_ok:
-            self.on_ok(obj)
-        self.destroy()
-
-
-class CurveManagerDialog(tk.Toplevel):
-    """Okno zarządzania WSZYSTKIMI zestawami danych dla jednego pola-krzywej
-    (lista: dodawanie/usuwanie wielu krzywych; dict: jeden zestaw; raw: sam CSV)."""
-
-    def __init__(self, parent, field_key, current_data, on_change):
-        super().__init__(parent)
-        self.field_key = field_key
-        self.schema = CURVE_SCHEMAS[field_key]
-        self.on_change = on_change
-        self.title(f"Zarządzanie krzywymi – {field_key}")
-        self.geometry("560x360")
-        self.grab_set()
-
-        container = self.schema["container"]
-
-        if container == "raw":
-            # Brak metadanych - po prostu jedna tablica [[X],[Y]]
-            self.data = current_data
-            frm = ttk.Frame(self, padding=12)
-            frm.pack(fill="both", expand=True)
-            self._raw_label = ttk.Label(frm, text=self._raw_status_text(), foreground="gray")
-            self._raw_label.pack(anchor="w", pady=(0, 10))
-            ttk.Button(frm, text="📁 Wybierz CSV (X;Y)…", command=self._pick_raw_csv).pack(anchor="w")
-            ttk.Button(frm, text="Zamknij", command=self._close).pack(anchor="e", pady=(20, 0))
-            return
-
-        if container == "dict":
-            # Jeden obiekt - od razu otwieramy formularz edycji/dodania
-            self.data = current_data
-            self.withdraw()  # nie pokazuj pustego okna menedżera
-            AddDatasetDialog(parent, field_key, self.schema, initial=current_data or {},
-                              on_ok=self._set_dict_result)
-            return
-
-        # container == "list"
-        self.data = list(current_data) if current_data else []
-        frm = ttk.Frame(self, padding=10)
-        frm.pack(fill="both", expand=True)
-
-        ttk.Label(frm, text=f"Zestawy danych dla: {field_key}",
-                  font=("Arial", 9, "bold")).pack(anchor="w")
-
-        list_frame = ttk.Frame(frm)
-        list_frame.pack(fill="both", expand=True, pady=8)
-        self._listbox = tk.Listbox(list_frame, height=10)
-        self._listbox.pack(side="left", fill="both", expand=True)
-        sb = ttk.Scrollbar(list_frame, orient="vertical", command=self._listbox.yview)
-        sb.pack(side="right", fill="y")
-        self._listbox.config(yscrollcommand=sb.set)
-        self._refresh_listbox()
-
-        btns = ttk.Frame(frm)
-        btns.pack(fill="x", pady=(4, 0))
-        ttk.Button(btns, text="➕ Dodaj zestaw…", command=self._add_dataset).pack(side="left")
-        ttk.Button(btns, text="🗑 Usuń wybrany", command=self._remove_selected).pack(side="left", padx=6)
-        ttk.Button(btns, text="Zamknij", command=self._close).pack(side="right")
-
-    # -- helpers dla container == "raw" --------------------------------------
-    def _raw_status_text(self):
-        if isinstance(self.data, list) and len(self.data) == 2:
-            return f"✅ aktualnie: {len(self.data[0])} punktów"
-        return "(brak danych)"
-
-    def _pick_raw_csv(self):
-        fp = filedialog.askopenfilename(title="Wybierz plik CSV (kolumny X;Y)",
-                                         filetypes=[("CSV", "*.csv"), ("Wszystkie pliki", "*.*")])
-        if not fp:
-            return
-        try:
-            self.data = csv_to_graph_array(fp)
-            self._raw_label.config(text=self._raw_status_text() + f" (z {os.path.basename(fp)})",
-                                    foreground="green")
-        except Exception as ex:
-            messagebox.showerror("Błąd wczytywania CSV", str(ex))
-
-    # -- helpers dla container == "dict" -------------------------------------
-    def _set_dict_result(self, obj):
-        self.data = obj
-        self._close()
-
-    # -- helpers dla container == "list" -------------------------------------
-    def _refresh_listbox(self):
-        self._listbox.delete(0, "end")
-        for i, obj in enumerate(self.data):
-            self._listbox.insert("end", f"{i+1}. {describe_dataset(self.field_key, obj)}")
-
-    def _add_dataset(self):
-        def _appended(obj):
-            self.data.append(obj)
-            self._refresh_listbox()
-        AddDatasetDialog(self, self.field_key, self.schema, on_ok=_appended)
-
-    def _remove_selected(self):
-        sel = self._listbox.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        if messagebox.askyesno("Potwierdź", "Usunąć wybrany zestaw danych?"):
-            del self.data[idx]
-            self._refresh_listbox()
-
-    def _close(self):
-        if self.on_change:
-            self.on_change(self.data)
-        self.destroy()
 
 # ============================================================================
 # MAIN GUI CLASS
@@ -1078,7 +809,7 @@ class TransistorGUI:
         ttk.Button(tb, text="📋 Copy All (TSV)", command=self._profile_copy_all).pack(side="right", padx=4)
         ttk.Button(tb, text="📊 Add to Compare", command=self._profile_add_compare).pack(side="right", padx=4)
         ttk.Button(tb, text="✏️  Open in Editor", command=self._profile_open_editor).pack(side="right", padx=4)
-        ttk.Button(tb, text="📤 Load into Export Tool", command=self._profile_export).pack(side="right", padx=4)
+        ttk.Button(tb, text="📤 Export this device", command=self._profile_export).pack(side="right", padx=4)
 
         pane = ttk.PanedWindow(p, orient="vertical")
         pane.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
@@ -1225,10 +956,8 @@ class TransistorGUI:
     def _profile_export(self):
         if self._profile_row is None: return
         name = str(self._profile_row.get("name",""))
-        if hasattr(self, "_export_combo"):
-            self._export_combo.set(name)
-        self.nb.select(self.tab_export)
-        self.status.config(text=f"Loaded '{name}' into Export tool.")
+        sub  = self.df[self.df["name"]==name]
+        if not sub.empty: self._do_export_df(sub)
 
     # ==================================================================
     # COMPARE TAB  - transistor basket, charts side by side
@@ -1597,11 +1326,11 @@ class TransistorGUI:
                 row=ri, column=col, padx=5, pady=3, sticky="w")
             frm = ttk.Frame(sf)
             frm.grid(row=ri, column=col+1, padx=5, pady=3, sticky="ew")
-            self._create_graph_data[key] = empty_container(key)
-            btn = ttk.Button(frm, text="🗂️ Manage curves…",
-                             command=lambda k=key: self._create_manage_curves(k))
+            self._create_graph_data[key]  = None
+            btn = ttk.Button(frm, text="📁 Add curves…",
+                             command=lambda k=key: self._create_import_csv(k))
             btn.pack(side="left")
-            lbl = ttk.Label(frm, text=f"(no data)  ({meta.get('desc','')})",
+            lbl = ttk.Label(frm, text=f"No dataset  ({meta.get('desc','')})",
                             font=("Arial",8,"italic"), foreground="gray")
             lbl.pack(side="left", padx=6, fill="x", expand=True)
             self._create_graph_labels[key] = lbl
@@ -1614,34 +1343,7 @@ class TransistorGUI:
         ttk.Button(bf, text="🧹 Clear Form",
                    command=self._create_clear).pack(side="left", padx=4, ipady=4)
 
-    def _create_manage_curves(self, key: str):
-        """Otwiera CurveManagerDialog dla pola `key` w zakładce Create."""
-        def _updated(new_data):
-            self._create_graph_data[key] = new_data
-            self._update_curve_label(self._create_graph_labels[key], key, new_data)
-        CurveManagerDialog(self.root, key, self._create_graph_data.get(key), _updated)
-
-    def _update_curve_label(self, label_widget, key: str, data):
-        """Odświeża tekst etykiety statusu przy przycisku 'Manage curves…'."""
-        schema = CURVE_SCHEMAS[key]
-        if schema["container"] == "list":
-            n = len(data) if data else 0
-            if n == 0:
-                label_widget.config(text="(no data)", foreground="gray", font=("Arial",8,"italic"))
-            else:
-                label_widget.config(text=f"✅ {n} dataset(s)", foreground=CLR_GREEN, font=("Arial",8,"bold"))
-        elif schema["container"] == "dict":
-            if data:
-                label_widget.config(text="✅ dataset present", foreground=CLR_GREEN, font=("Arial",8,"bold"))
-            else:
-                label_widget.config(text="(no data)", foreground="gray", font=("Arial",8,"italic"))
-        else:  # raw
-            if isinstance(data, list) and len(data) == 2:
-                label_widget.config(text=f"✅ {len(data[0])} pts", foreground=CLR_GREEN, font=("Arial",8,"bold"))
-            else:
-                label_widget.config(text="(no data)", foreground="gray", font=("Arial",8,"italic"))
-
-    def _create_import_csv_OLD_UNUSED(self, col: str):
+    def _create_import_csv(self, col: str):
         fp = filedialog.askopenfilename(
             title=f"Select CSV for {col}",
             filetypes=[("CSV","*.csv"),("Text","*.txt"),("All","*.*")])
@@ -1677,27 +1379,10 @@ class TransistorGUI:
 
         structured = build_structured_json(flat)
 
-        # Inject curve data collected via CurveManagerDialog - do WŁAŚCIWEJ,
-        # zagnieżdżonej ścieżki (np. switch.channel), a nie do płaskiego klucza.
-        for k, data in self._create_graph_data.items():
-            schema = CURVE_SCHEMAS.get(k)
-            if schema is None or data in (None, [], {}):
-                continue
-            set_nested(structured, schema["nested_path"], data)
-
-        # c_oss_er / c_oss_tr: pogrupowanie 3 skalarów (c_o, v_ds, v_gs) w jeden
-        # pod-obiekt EffectiveOutputCapacitance, zamiast płaskich pól.
-        for group_key, group in SCALAR_GROUP_FIELDS.items():
-            obj = {}
-            for flat_key, member_name in group["members"].items():
-                v = flat.get(flat_key, "")
-                if v not in ("", None):
-                    try:
-                        obj[member_name] = float(v)
-                    except ValueError:
-                        pass
-            if obj:
-                set_nested(structured, group["nested_path"], obj)
+        # Inject curve data collected via CSV imports
+        for k, rows in self._create_graph_data.items():
+            if rows is not None:
+                structured[k] = rows
 
         vnum = "".join(c for c in vabs if c.isdigit()) or "Unsorted"
         dest_dir = os.path.join(_THIS_DIR, cat, f"{vnum}V")
@@ -1723,11 +1408,11 @@ class TransistorGUI:
             if hasattr(e, "placeholder"):
                 e.insert(0, e.placeholder); e.config(foreground="gray")
         for k in list(self._create_graph_data.keys()):
-            self._create_graph_data[k] = empty_container(k)
+            self._create_graph_data[k] = None
             meta = FIELD_META.get(k, {"desc": "data"})
             if k in self._create_graph_labels:
                 self._create_graph_labels[k].config(
-                    text=f"(no data)  ({meta.get('desc','')})",
+                    text=f"No dataset  ({meta.get('desc','')})",
                     foreground="gray", font=("Arial",8,"italic"))
 
     # ==================================================================
@@ -1828,11 +1513,11 @@ class TransistorGUI:
                 row=ri, column=col, padx=5, pady=3, sticky="w")
             frm = ttk.Frame(sf)
             frm.grid(row=ri, column=col+1, padx=5, pady=3, sticky="ew")
-            self._edit_graph_data[key] = empty_container(key)
-            btn = ttk.Button(frm, text="🗂️ Manage curves…",
-                             command=lambda k=key: self._edit_manage_curves(k))
+            self._edit_graph_data[key] = None
+            btn = ttk.Button(frm, text="📁 Replace curves…",
+                             command=lambda k=key: self._edit_import_csv(k))
             btn.pack(side="left")
-            lbl = ttk.Label(frm, text=f"(no data)  {meta.get('desc','')}",
+            lbl = ttk.Label(frm, text=f"(unchanged)  {meta.get('desc','')}",
                             font=("Arial",8,"italic"), foreground="gray")
             lbl.pack(side="left", padx=6, fill="x", expand=True)
             self._edit_graph_labels[key] = lbl
@@ -1883,25 +1568,37 @@ class TransistorGUI:
             if val and val not in ("None","nan"):
                 ent.insert(0, val)
 
-        # Reset curve labels to show REAL current state from JSON - czytamy z
-        # właściwej, zagnieżdżonej ścieżki (schema['nested_path']), a nie z
-        # błędnego płaskiego klucza jak poprzednio (jd.get(key)).
+        # Reset curve labels to show current state from JSON
         for key in self._edit_graph_data:
-            schema = CURVE_SCHEMAS[key]
-            existing = get_nested(jd, schema["nested_path"])
-            if existing is None and schema["container"] == "list":
-                existing = []
-            self._edit_graph_data[key] = copy.deepcopy(existing) if existing else empty_container(key)
-            self._update_curve_label(self._edit_graph_labels[key], key, self._edit_graph_data[key])
+            self._edit_graph_data[key] = None   # None = keep existing in JSON
+            existing = jd.get(key)
+            if existing and isinstance(existing, list) and len(existing) > 0:
+                n_pts = len(existing[0]) if isinstance(existing[0], list) else len(existing)
+                self._edit_graph_labels[key].config(
+                    text=f"✅ existing data ({n_pts} pts) – click to replace",
+                    foreground=CLR_GREEN, font=("Arial",8,"bold"))
+            else:
+                self._edit_graph_labels[key].config(
+                    text="(no data) – click to add curves",
+                    foreground="gray", font=("Arial",8,"italic"))
 
         self._edit_status.config(text=f"Loaded: {os.path.basename(path)}", foreground="gray")
 
-    def _edit_manage_curves(self, key: str):
-        """Otwiera CurveManagerDialog dla pola `key` w zakładce Edit."""
-        def _updated(new_data):
-            self._edit_graph_data[key] = new_data
-            self._update_curve_label(self._edit_graph_labels[key], key, new_data)
-        CurveManagerDialog(self.root, key, self._edit_graph_data.get(key), _updated)
+    def _edit_import_csv(self, col: str):
+        fp = filedialog.askopenfilename(
+            title=f"Select CSV for {col}",
+            filetypes=[("CSV","*.csv"),("Text","*.txt"),("All","*.*")])
+        if not fp: return
+        try:
+            try:   df_c = pd.read_csv(fp, sep=None, engine="python")
+            except: df_c = pd.read_csv(fp, sep=";")
+            rows = df_c.dropna().values.tolist()
+            self._edit_graph_data[col] = rows
+            self._edit_graph_labels[col].config(
+                text=f"✅ NEW: {os.path.basename(fp)}  ({len(rows)} pts)",
+                foreground="#e67e22", font=("Arial",8,"bold"))
+        except Exception as e:
+            messagebox.showerror("CSV Error", str(e))
 
     def _edit_save(self):
         if not self._edit_current_path or not self._edit_current_json:
@@ -1940,31 +1637,10 @@ class TransistorGUI:
                 else:
                     updated[key] = val
 
-        # Apply new curve data where provided - zapis do WŁAŚCIWEJ, zagnieżdżonej
-        # ścieżki (np. switch.channel), a nie do płaskiego klucza jak poprzednio.
-        for k, data in self._edit_graph_data.items():
-            schema = CURVE_SCHEMAS.get(k)
-            if schema is None:
-                continue
-            # Usuwamy ewentualny "zepsuty" płaski klucz z poprzednich, błędnych
-            # zapisów (np. stary plik miał updated["switch_channel"] = [...]),
-            # żeby nie zaśmiecał JSON-a równolegle z poprawną, zagnieżdżoną wersją.
-            updated.pop(k, None)
-            if data in (None, [], {}):
-                continue
-            set_nested(updated, schema["nested_path"], data)
-
-        for group_key, group in SCALAR_GROUP_FIELDS.items():
-            obj = {}
-            for flat_key, member_name in group["members"].items():
-                v = flat.get(flat_key, "")
-                if v:
-                    try:
-                        obj[member_name] = float(v)
-                    except ValueError:
-                        pass
-            if obj:
-                set_nested(updated, group["nested_path"], obj)
+        # Apply new curve data where provided
+        for k, rows in self._edit_graph_data.items():
+            if rows is not None:
+                updated[k] = rows
 
         pretty = json.dumps(updated, indent=4, ensure_ascii=False)
         try:
@@ -1983,9 +1659,9 @@ class TransistorGUI:
     def _edit_clear(self):
         for ent in self._edit_entries.values(): ent.delete(0, "end")
         for k in list(self._edit_graph_data.keys()):
-            self._edit_graph_data[k] = empty_container(k)
+            self._edit_graph_data[k] = None
             self._edit_graph_labels[k].config(
-                text="(no data)", foreground="gray", font=("Arial",8,"italic"))
+                text="(unchanged)", foreground="gray", font=("Arial",8,"italic"))
         self._edit_current_path = None
         self._edit_current_json = None
         self._edit_status.config(text="", foreground="gray")
