@@ -1758,7 +1758,8 @@ def _prepare_loss_data(energy_list: list) -> dict | None:
     Selects graph_i_e curves, interpolates to 20 equally-spaced current points
     from 0 to limit_current (= min of all curve maxima, matching reference).
     VoltageAxis always starts with -10 and 0 (zero-energy rows), then data voltages.
-    Energy values stored in J (scale=\"1\" in XML, matching reference template).
+    Energy values are stored internally in J and exported to PLECS as mJ
+    (Energy scale=\"0.001\").
     """
     import numpy as np
 
@@ -1821,7 +1822,7 @@ def _prepare_loss_data(energy_list: list) -> dict | None:
         "voltage_axis": voltage_axis,
         "temp_axis": sorted(temp_axis),
         "energy_table": energy_table,
-        "energy_scale": "1",   # J (not mJ) – reference template uses scale="1"
+        "energy_scale": "0.001",   # XML values are written in mJ
     }
 
 
@@ -1912,7 +1913,7 @@ def export_plecs_xml(json_path: str, output_dir: str = ".") -> bool:
             "current_axis": cond["current_axis"],
             "voltage_axis": [-10, 0, v_abs_max],
             "temp_axis":    cond["temp_axis"],
-            "energy_scale": "1",
+            "energy_scale": "0.001",
             "energy_table": [
                 [[0.0]*n, [0.0]*n, [0.0]*n]
                 for _ in cond["temp_axis"]
