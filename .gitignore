@@ -1,0 +1,9 @@
+
+__pycache__/
+*.pyc
+.idea/workspace.xml
+
+.idea/workspace.xml
+.idea/TransistorDataBase.iml
+__pycache__/
+*.pyc
