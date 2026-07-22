@@ -29,6 +29,7 @@ preprocess_query            = _szukaj.preprocess_query
 export_folder_structure     = _szukaj.export_folder_structure
 export_plecs_xml            = _szukaj.export_plecs_xml
 import_plecs_xml_func       = _szukaj.import_plecs_xml   # imported under a different name to avoid collision
+build_transistor_json_from_plecs = _szukaj.build_transistor_json_from_plecs
 import_ready_json_file      = _szukaj.import_ready_json_file
 deep_search_charts          = _szukaj.deep_search_charts
 build_structured_json       = _szukaj.build_structured_json
@@ -66,11 +67,14 @@ _CHART_AXIS_MAP = [
     # voltage - conduction current
     ("graph_v_i",       "V [V]",        "I [A]"),
     ("graph_i_v",       "I [A]",        "V [V]"),
-    # switching energy vs current
-    ("graph_i_e",       "I [A]",        "E [J]"),
+    # switching energy named by type — must come BEFORE the generic "graph_i_e"
+    # pattern below, since keys like "switch_e_on_graph_i_e" contain both
+    # fragments as substrings and the first match in this list wins.
     ("e_on",            "I [A]",        "E_on [J]"),
     ("e_off",           "I [A]",        "E_off [J]"),
     ("e_rr",            "I [A]",        "E_rr [J]"),
+    # switching energy vs current (generic fallback)
+    ("graph_i_e",       "I [A]",        "E [J]"),
     # capacitances vs voltage
     ("c_iss",           "V_DS [V]",     "C_iss [F]"),
     ("c_oss",           "V_DS [V]",     "C_oss [F]"),
@@ -1297,7 +1301,7 @@ class TransistorGUI:
 
         # Simple scalar fields with greyed placeholders
         for key in simple_fields:
-            if key in special: continue
+            if key in special or key == "name": continue   # 'name' has its own dedicated field above
             meta = FIELD_META.get(key, {"label": key, "desc": ""})
             col = ci % 4
             ttk.Label(sf, text=f"{meta['label']}:", font=("Arial",9)).grid(
@@ -1373,6 +1377,16 @@ class TransistorGUI:
             messagebox.showerror("Error","'name' and 'Category' are required."); return
         if cat not in TECH_CATEGORIES:
             messagebox.showerror("Error",f"Category must be one of: {TECH_CATEGORIES}"); return
+
+        # Block duplicate names anywhere in the database (not just same file path)
+        existing_names = self.df["name"].astype(str).str.strip().str.lower()
+        if name.strip().lower() in set(existing_names):
+            messagebox.showerror(
+                "Duplicate name",
+                f"A transistor named '{name}' already exists in the database.\n"
+                "Choose a different name, or use the Edit tab to modify the existing one."
+            )
+            return
 
         flat["creation_date"] = datetime.date.today().strftime("%Y-%m-%d")
         flat["last_modified"] = flat["creation_date"]
@@ -1486,7 +1500,7 @@ class TransistorGUI:
         curve_fields  = [k for k in FIELD_META if is_curve_field(k)]
 
         for key in simple_fields:
-            if key in special: continue
+            if key in special or key == "name": continue   # 'name' has its own dedicated field above
             meta = FIELD_META.get(key, {"label": key, "desc": ""})
             col = ci % 4
             ttk.Label(sf, text=f"{meta['label']}:", font=("Arial",9)).grid(
@@ -1766,34 +1780,38 @@ class TransistorGUI:
         if not sw or not os.path.exists(sw):
             messagebox.showerror("Error","Select a valid switch XML file."); return
 
-        PLECS_NS_URI = "http://www.plexim.com/xml/semiconductors/"
-        ns = {"p": PLECS_NS_URI}
+        try:
+            jdata = build_transistor_json_from_plecs(sw, di)
+        except Exception as e:
+            self._import_log_write(f"[ERROR] {e}")
+            messagebox.showerror("Import Error", str(e))
+            return
 
-        def _get_partnumber(path):
-            try:
-                tree = ET.parse(path)
-                pkg  = tree.getroot().find("p:Package", ns)
-                return pkg.attrib.get("partnumber","Unknown") if pkg is not None else "Unknown"
-            except Exception:
-                return "Unknown"
+        name = jdata["name"]
+        # Fields the form asks for override whatever PLECS-derived defaults were set,
+        # since PLECS XML itself does not carry v_abs_max / category at all.
+        if cat:
+            jdata["type"] = cat
+            jdata["technology"] = cat
+        if v:
+            jdata["v_abs_max"] = v
 
-        name = _get_partnumber(sw)
         vnum = "".join(c for c in v if c.isdigit()) or "Unsorted"
         out  = os.path.join(_THIS_DIR, cat, f"{vnum}V")
         os.makedirs(out, exist_ok=True)
 
         try:
-            jdata = {"name": name, "type": cat, "technology": cat,
-                     "v_abs_max": v, "manufacturer": "", "author": "PLECS import"}
-            if di and os.path.exists(di):
-                di_name = _get_partnumber(di)
-                jdata["diode_source_file"] = di_name
-
             fn = "".join(c if c.isalnum() or c in('_','-') else '_' for c in name)+".json"
             fp = os.path.join(out, fn)
             with open(fp,"w",encoding="utf-8") as f: json.dump(jdata,f,indent=4,ensure_ascii=False)
-            self._import_log_write(f"[OK] Created skeleton JSON for '{name}' → {fp}")
-            self._import_log_write("     Use ✏️ Edit to fill in the remaining fields.")
+            self._import_log_write(f"[OK] Imported '{name}' -> {fp}")
+            self._import_log_write(f"     switch.channel: {len(jdata['switch']['channel'])}  "
+                                    f"e_on: {len(jdata['switch']['e_on'])}  "
+                                    f"e_off: {len(jdata['switch']['e_off'])}  "
+                                    f"diode.channel: {len(jdata['diode']['channel'])}  "
+                                    f"diode.e_rr: {len(jdata['diode']['e_rr'])}")
+            self._import_log_write("     v_abs_max, i_cont, housing_type etc. are still blank "
+                                    "(not present in PLECS XML) - fill them in via ✏️ Edit.")
             self._reload_db()
         except Exception as e:
             self._import_log_write(f"[ERROR] {e}")

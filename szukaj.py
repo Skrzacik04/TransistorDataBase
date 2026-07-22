@@ -74,6 +74,7 @@ if 'readline' in sys.modules:
 # GLOBALNY SŁOWNIK METADANYCH PARAMETRÓW
 # ---------------------------------------------------------------------------
 FIELD_META = {
+    "name": {"label": "Name", "desc": "Unique identifier / model name of the transistor"},
     "Category": {"label": "Category", "desc": "Transistor family (e.g., MOSFET, IGBT, GaN)"},
     "type": {"label": "Type", "desc": "Component configuration type"},
     "technology": {"label": "Technology", "desc": "Main semiconductor material"},
@@ -81,6 +82,7 @@ FIELD_META = {
     "author": {"label": "Author", "desc": "Name of the person who created this entry"},
     "comment": {"label": "Comment", "desc": "General comments regarding the database entry"},
     "housing_type": {"label": "Housing Type", "desc": "Package type (e.g., TO-247, TO-220)"},
+    "Subfolder": {"label": "Voltage Subfolder", "desc": "Voltage-class subfolder the file is stored in (e.g., '1200V')"},
     "housing_area": {"label": "Housing Area [m2]", "desc": "Total physical footprint area"},
     "cooling_area": {"label": "Cooling Area [m2]", "desc": "Thermal contact surface area"},
     "v_abs_max": {"label": "V_abs_max [V]", "desc": "Absolute maximum blocking voltage"},
@@ -102,6 +104,7 @@ FIELD_META = {
     "template_version": {"label": "Template Version", "desc": "Version of the JSON template"},
     "template_date": {"label": "Template Date", "desc": "Version date of the JSON template"},
     "last_modified": {"label": "Last Modified", "desc": "Date of the last update"},
+    "creation_date": {"label": "Creation Date", "desc": "Date the database entry was first created"},
     "raw_measurement_data": {"label": "Raw Measurement Data", "desc": "Unprocessed laboratory test data"},
     "c_iss": {"label": "C_iss Curves", "desc": "Input capacitance vs. voltage"},
     "c_oss": {"label": "C_oss Curves", "desc": "Output capacitance vs. voltage"},
@@ -118,6 +121,7 @@ FIELD_META = {
     "diode_manufacturer": {"label": "Diode Manufacturer", "desc": "Manufacturer of the diode"},
     "diode_technology": {"label": "Diode Technology", "desc": "Diode material/type"},
     "diode_comment": {"label": "Diode Comment", "desc": "Comments on the diode"},
+    "diode_source_file": {"label": "Diode Source File", "desc": "Original PLECS XML file the diode data was imported from"},
     "diode_t_j_max": {"label": "Diode T_j_max [°C]", "desc": "Max junction temperature (diode)"},
     "diode_channel": {"label": "Diode Channel (I-V)", "desc": "Diode I-V conduction characteristics"},
     "diode_linearized_diode": {"label": "Linearized Diode", "desc": "Piecewise-linear diode model"},
@@ -2031,186 +2035,236 @@ def export_plecs_xml(json_path: str, output_dir: str = ".") -> bool:
 # PLECS XML IMPORT
 # ---------------------------------------------------------------------------
 
-def import_plecs_xml() -> bool:
+def parse_plecs_xml_file(path: str) -> tuple:
     """
-    Import a pair of PLECS-format XML files (switch + diode) and save as a
-    transistor JSON file in the appropriate category folder.
+    Parse one PLECS semiconductor XML file.
 
-    The function reads ConductionLoss, TurnOnLoss, TurnOffLoss and
-    ThermalModel (Foster only) sections.  Fields that PLECS XML does not
-    carry (v_abs_max, housing_type, etc.) are left blank so the user can
-    fill them with the 'edit' command afterwards.
+    Handles two real-world file layouts:
+      1. "Separate files" layout (our own export_plecs_xml() output): one
+         switch.xml with a single <ConductionLoss> (no 'gate' attribute) and
+         one diode.xml with its own single <ConductionLoss>.
+      2. "Combined" layout used by some vendor exports (e.g. Wolfspeed/PLECS
+         MOSFET+body-diode models): ONE file, class="MOSFET with Diode",
+         with TWO <ConductionLoss> elements distinguished by gate="on"
+         (switch channel) / gate="off" (body-diode conduction, encoded with
+         reversed current/voltage sign convention).
 
-    :return: True if a JSON file was written successfully, False otherwise.
+    Thermal model: supports both Foster (<Branch type="Foster"> with
+    <RTauElement R=.. Tau=..>) and Cauer (<Branch type="Cauer"> with
+    <RCElement R=.. C=..>) networks. Cauer R/C pairs are converted to an
+    approximate R/Tau representation (Tau = R*C per stage) so they still
+    fit the single 'thermal_foster' storage field used elsewhere in this
+    project - this is a simplification, not an exact Cauer->Foster
+    transform, and is flagged as such in the returned dict.
+
+    :return: (info, switch_channel_list, diode_channel_list, e_on_list, e_off_list, foster_dict)
     """
     PLECS_NS_URI = "http://www.plexim.com/xml/semiconductors/"
     ns = {"p": PLECS_NS_URI}
 
-    print("\n--- Import PLECS XML files ---")
-    sw_path = input("Path to switch XML file: ").strip().strip("'\"")
-    di_path = input("Path to diode XML file (Enter to skip): ").strip().strip("'\"")
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"File not found: {path}")
 
-    def _parse_xml_file(path: str) -> tuple:
-        """Parse one PLECS XML file.  Returns (info_dict, channel_list, e_on_list, e_off_list, foster_dict)."""
-        if not os.path.isfile(path):
-            raise FileNotFoundError(f"File not found: {path}")
+    tree = ET.parse(path)
+    root = tree.getroot()
+    pkg = root.find("p:Package", ns)
+    if pkg is None:
+        raise ValueError("No <Package> element found - not a valid PLECS XML file.")
 
-        tree = ET.parse(path)
-        root = tree.getroot()
-        pkg = root.find("p:Package", ns)
-        if pkg is None:
-            raise ValueError("No <Package> element found – not a valid PLECS XML file.")
+    class_str = pkg.attrib.get("class", "IGBT")
+    info = {
+        "class":       class_str,
+        "vendor":      pkg.attrib.get("vendor", "Unknown"),
+        "partnumber":  pkg.attrib.get("partnumber", "Unknown"),
+        "is_igbt":     "IGBT" in class_str,
+        "is_mosfet":   "MOSFET" in class_str,
+    }
+    if not info["is_igbt"] and not info["is_mosfet"] and class_str != "Diode":
+        print(f"[WARNING] Unrecognized Package class '{class_str}' - "
+              f"treating current-axis mirroring as for a MOSFET/IGBT switch.")
 
-        info = {
-            "class":       pkg.attrib.get("class", "IGBT"),
-            "vendor":      pkg.attrib.get("vendor", "Unknown"),
-            "partnumber":  pkg.attrib.get("partnumber", "Unknown"),
-        }
+    semi = pkg.find("p:SemiconductorData", ns)
+    if semi is None:
+        raise ValueError("No <SemiconductorData> found.")
 
-        variables_el = pkg.find("p:Variables", ns)
-        if variables_el is not None and variables_el.text and variables_el.text.strip():
-            raise ImportError(
-                "This file uses PLECS scripted variables – only 'Table only' format is supported.")
+    def _mirror_split(current_axis, v_vals, is_switch: bool):
+        """Keep the physically meaningful (non-negative-current) half of a
+        PLECS ConductionLoss table, which mirrors negative currents for
+        MOSFET/IGBT switch data."""
+        if not is_switch:
+            return current_axis, v_vals
+        mid = len(current_axis) // 2
+        if len(current_axis) % 2 == 0 and current_axis[mid] >= 0:
+            return current_axis[mid:], v_vals[mid:]
+        i_half = [i for i in current_axis if i >= 0]
+        return i_half, v_vals[len(current_axis) - len(i_half):]
 
-        semi = pkg.find("p:SemiconductorData", ns)
-        if semi is None:
-            raise ValueError("No <SemiconductorData> found.")
+    switch_channel_list, diode_channel_list = [], []
 
-        channel_list, e_on_list, e_off_list = [], [], []
+    # ---- ConductionLoss: iterate over ALL occurrences (there can be one
+    #      per gate state: gate="on" -> switch channel, gate="off" ->
+    #      body-diode conduction, both living in the same combined file) ----
+    for cond_el in semi.findall("p:ConductionLoss", ns):
+        gate = cond_el.attrib.get("gate", "on").lower()
+        method = cond_el.findtext("p:ComputationMethod", default="", namespaces=ns).lower()
+        if "table" not in method:
+            continue  # formula-only tables are not supported, skip silently
 
-        # ---- ConductionLoss ----
-        cond_el = semi.find("p:ConductionLoss", ns)
-        if cond_el is not None:
-            method = cond_el.findtext("p:ComputationMethod", default="", namespaces=ns).lower()
-            if "table" not in method:
-                raise ImportError("ConductionLoss is not 'Table only' – cannot import.")
+        i_text = cond_el.findtext("p:CurrentAxis", default="", namespaces=ns)
+        t_text = cond_el.findtext("p:TemperatureAxis", default="", namespaces=ns)
+        current_axis = [float(x) for x in i_text.split() if x]
+        temp_axis    = [float(x) for x in t_text.split() if x]
 
-            i_text = cond_el.findtext("p:CurrentAxis", default="", namespaces=ns)
-            t_text = cond_el.findtext("p:TemperatureAxis", default="", namespaces=ns)
-            current_axis = [float(x) for x in i_text.split() if x]
-            temp_axis    = [float(x) for x in t_text.split() if x]
+        vdrop_el = cond_el.find("p:VoltageDrop", ns)
+        if vdrop_el is None:
+            continue
+        scale = float(vdrop_el.attrib.get("scale", "1"))
 
-            vdrop_el = cond_el.find("p:VoltageDrop", ns)
-            scale = float(vdrop_el.attrib.get("scale", "1")) if vdrop_el is not None else 1.0
-            v_g = 12.0 if info["class"] != "Diode" else 0.0
+        target_list = switch_channel_list if gate == "on" else diode_channel_list
 
-            for t_idx, temp_el in enumerate(vdrop_el.findall("p:Temperature", ns)):
-                v_vals = [float(x) * scale for x in temp_el.text.split() if x]
-                # PLECS ConductionLoss: VoltageDrop(I) -> graph_v_i = [V_axis, I_axis]
-                # For MOSFET PLECS mirrors negative currents; strip them (keep non-negative half)
-                if info["class"] != "Diode":
-                    mid = len(current_axis) // 2
-                    if len(current_axis) % 2 == 0 and current_axis[mid] >= 0:
-                        i_half = current_axis[mid:]
-                        v_half = v_vals[mid:]
-                    else:
-                        i_half = [i for i in current_axis if i >= 0]
-                        v_half = v_vals[len(current_axis) - len(i_half):]
-                else:
-                    i_half = current_axis
-                    v_half = v_vals
+        for t_idx, temp_el in enumerate(vdrop_el.findall("p:Temperature", ns)):
+            v_vals = [float(x) * scale for x in temp_el.text.split() if x]
+            tj = temp_axis[t_idx] if t_idx < len(temp_axis) else 25.0
 
+            if gate == "on":
+                i_half, v_half = _mirror_split(current_axis, v_vals, is_switch=True)
+                v_g = 12.0 if info["class"] != "Diode" else 0.0
+                target_list.append({"t_j": tj, "v_g": v_g, "graph_v_i": [v_half, i_half]})
+            else:
+                # gate="off": body-diode conducts in the reverse direction of the
+                # switch's normal drain current, so PLECS encodes it with negative
+                # I/V. Negate both, re-sort ascending, then keep the (now positive)
+                # forward-conduction half - this yields a standard positive I-V
+                # diode curve consistent with how diode.channel is stored elsewhere.
+                pairs = sorted(zip((-i for i in current_axis), (-v for v in v_vals)))
+                neg_i = [p[0] for p in pairs]
+                neg_v = [p[1] for p in pairs]
+                i_half, v_half = _mirror_split(neg_i, neg_v, is_switch=True)
+                target_list.append({"t_j": tj, "v_g": 0.0, "graph_v_i": [v_half, i_half]})
+
+    # ---- TurnOnLoss / TurnOffLoss ----
+    def _parse_loss(tag: str, default_v_g: float) -> list:
+        el = semi.find(f"p:{tag}", ns)
+        if el is None:
+            return []
+        method = el.findtext("p:ComputationMethod", default="", namespaces=ns).lower()
+        if "table" not in method:
+            return []  # table-and-formula: we still read the table (at the
+                        # formula's reference R_g, where the scale factor is 1)
+
+        i_text = el.findtext("p:CurrentAxis", default="", namespaces=ns)
+        v_text = el.findtext("p:VoltageAxis", default="", namespaces=ns)
+        t_text = el.findtext("p:TemperatureAxis", default="", namespaces=ns)
+        current_axis = [float(x) for x in i_text.split() if x]
+        voltage_axis = [float(x) for x in v_text.split() if x]
+        temp_axis    = [float(x) for x in t_text.split() if x]
+
+        energy_el = el.find("p:Energy", ns)
+        scale = float(energy_el.attrib.get("scale", "1")) if energy_el is not None else 1.0
+
+        result = []
+        for t_idx, temp_el in enumerate(energy_el.findall("p:Temperature", ns)):
+            for v_idx, volt_el in enumerate(temp_el.findall("p:Voltage", ns)):
+                v_supply = voltage_axis[v_idx] if v_idx < len(voltage_axis) else 0.0
+                if v_supply <= 0.0:
+                    continue  # skip zero/negative-voltage placeholder rows
+                e_vals = [float(x) * scale for x in volt_el.text.split() if x]  # already in J
                 tj = temp_axis[t_idx] if t_idx < len(temp_axis) else 25.0
-                channel_list.append({
+                result.append({
+                    "dataset_type": "graph_i_e",
                     "t_j": tj,
-                    "v_g": v_g,
-                    "graph_v_i": [v_half, i_half]
+                    "v_supply": v_supply,
+                    "v_g": default_v_g,
+                    "r_g": 0,
+                    "graph_i_e": [current_axis, e_vals]
                 })
+        return result
 
-        # ---- TurnOnLoss / TurnOffLoss ----
-        def _parse_loss(tag: str, default_v_g: float) -> list:
-            el = semi.find(f"p:{tag}", ns)
-            if el is None:
-                return []
-            method = el.findtext("p:ComputationMethod", default="", namespaces=ns).lower()
-            if "table" not in method:
-                return []
+    v_g_on  = 12.0 if info["class"] != "Diode" else 0.0
+    v_g_off = 0.0  if info["class"] != "Diode" else 12.0
+    e_on_list  = _parse_loss("TurnOnLoss",  v_g_on)
+    e_off_list = _parse_loss("TurnOffLoss", v_g_off)
 
-            i_text = el.findtext("p:CurrentAxis", default="", namespaces=ns)
-            v_text = el.findtext("p:VoltageAxis", default="", namespaces=ns)
-            t_text = el.findtext("p:TemperatureAxis", default="", namespaces=ns)
-            current_axis = [float(x) for x in i_text.split() if x]
-            voltage_axis = [float(x) for x in v_text.split() if x]
-            temp_axis    = [float(x) for x in t_text.split() if x]
-
-            energy_el = el.find("p:Energy", ns)
-            scale = float(energy_el.attrib.get("scale", "1")) if energy_el is not None else 1.0
-
-            result = []
-            for t_idx, temp_el in enumerate(energy_el.findall("p:Temperature", ns)):
-                for v_idx, volt_el in enumerate(temp_el.findall("p:Voltage", ns)):
-                    v_supply = voltage_axis[v_idx] if v_idx < len(voltage_axis) else 0.0
-                    if v_supply == 0.0:
-                        continue  # skip zero-voltage placeholder rows
-                    e_vals = [float(x) * scale for x in volt_el.text.split() if x]
-                    e_joules = [e / 1000.0 for e in e_vals]  # mJ -> J
-                    tj = temp_axis[t_idx] if t_idx < len(temp_axis) else 25.0
-                    result.append({
-                        "dataset_type": "graph_i_e",
-                        "t_j": tj,
-                        "v_supply": v_supply,
-                        "v_g": default_v_g,
-                        "r_g": 0,
-                        "graph_i_e": [current_axis, e_joules]
-                    })
-            return result
-
-        v_g_on  = 12.0 if info["class"] != "Diode" else 0.0
-        v_g_off = 0.0  if info["class"] != "Diode" else 12.0
-        e_on_list  = _parse_loss("TurnOnLoss",  v_g_on)
-        e_off_list = _parse_loss("TurnOffLoss", v_g_off)
-
-        # ---- ThermalModel (Foster) ----
-        foster_dict = {}
-        thermal_el = pkg.find("p:ThermalModel", ns)
-        if thermal_el is not None:
-            branch = thermal_el.find("p:Branch", ns)
-            if branch is not None and branch.attrib.get("type", "").lower() == "foster":
-                r_vec, tau_vec = [], []
+    # ---- ThermalModel: Foster (R/Tau) or Cauer (R/C, approximated as R/Tau=R*C) ----
+    foster_dict = {}
+    thermal_el = pkg.find("p:ThermalModel", ns)
+    if thermal_el is not None:
+        branch = thermal_el.find("p:Branch", ns)
+        if branch is not None:
+            branch_type = branch.attrib.get("type", "").lower()
+            r_vec, tau_vec = [], []
+            if branch_type == "foster":
                 for el in branch.findall("p:RTauElement", ns):
                     r_vec.append(float(el.attrib.get("R", 0)))
                     tau_str = el.attrib.get("Tau", "0")
                     tau_vec.append(float(tau_str) if tau_str else 0.0)
-                if r_vec:
-                    foster_dict = {
-                        "r_th_total":  sum(r_vec),
-                        "r_th_vector": r_vec,
-                        "tau_total":   sum(tau_vec),
-                        "tau_vector":  tau_vec,
-                        "c_th_total":  None,
-                        "c_th_vector": None,
-                        "graph_t_rthjc": []
-                    }
+            elif branch_type == "cauer":
+                for el in branch.findall("p:RCElement", ns):
+                    r = float(el.attrib.get("R", 0))
+                    c = float(el.attrib.get("C", 0))
+                    r_vec.append(r)
+                    tau_vec.append(r * c)  # approximation: not an exact Cauer->Foster transform
+            if r_vec:
+                foster_dict = {
+                    "r_th_total":  sum(r_vec),
+                    "r_th_vector": r_vec,
+                    "tau_total":   sum(tau_vec),
+                    "tau_vector":  tau_vec,
+                    "c_th_total":  None,
+                    "c_th_vector": None,
+                    "graph_t_rthjc": [],
+                }
+                if branch_type == "cauer":
+                    foster_dict["note"] = ("Converted from a Cauer (R/C) thermal network - "
+                                            "tau values are an R*C approximation, not an exact "
+                                            "Cauer-to-Foster transform.")
 
-        return info, channel_list, e_on_list, e_off_list, foster_dict
+    return info, switch_channel_list, diode_channel_list, e_on_list, e_off_list, foster_dict
 
-    # --- Parse switch file ---
-    try:
-        sw_info, sw_ch, sw_eon, sw_eoff, sw_foster = _parse_xml_file(sw_path)
-    except Exception as e:
-        print(f"[ERROR] Failed to parse switch XML: {e}")
-        return False
 
-    if sw_info["class"] not in ("IGBT", "MOSFET"):
-        print(f"[ERROR] Switch file class is '{sw_info['class']}' – expected IGBT or MOSFET.")
-        return False
+def build_transistor_json_from_plecs(sw_path: str, di_path: str = "") -> dict:
+    """
+    Parse a PLECS switch XML file (and an optional separate diode XML file)
+    and build a fully structured transistor dict - the same data extraction
+    used by the CLI 'import' command, but callable directly (no input(), no
+    file writing) so both the CLI and GUI.py can share one implementation.
 
-    # --- Parse diode file (optional) ---
-    di_ch, di_eoff, di_foster = [], [], {}
+    Handles both the "separate switch+diode files" layout and the
+    "combined single file" layout (gate="on"/"off" ConductionLoss in one
+    Package) transparently - diode data is merged from whichever source(s)
+    provide it.
+
+    :param sw_path: path to the switch (or combined) PLECS XML file (required)
+    :param di_path: path to a separate diode PLECS XML file (optional, pass "" to skip)
+    :return: a fully structured transistor dict, ready to json.dump()
+    :raises FileNotFoundError: if sw_path does not exist
+    :raises ValueError: if no <Package> / <SemiconductorData> found
+    """
+    sw_info, sw_ch, sw_di_ch, sw_eon, sw_eoff, sw_foster = parse_plecs_xml_file(sw_path)
+
+    # Diode data may come from: (a) gate="off" ConductionLoss in the SAME
+    # (combined) file, and/or (b) a genuinely separate diode XML file. Merge
+    # whatever is available rather than assuming only one source.
+    di_ch, di_eoff, di_foster = list(sw_di_ch), [], {}
     if di_path and os.path.isfile(di_path):
         try:
-            di_info, di_ch, _, di_eoff, di_foster = _parse_xml_file(di_path)
+            di_info, _di_sw_ch, _di_di_ch, _di_eon, di_eoff, di_foster = parse_plecs_xml_file(di_path)
+            di_ch.extend(_di_di_ch or _di_sw_ch)  # separate diode file: its own "switch" IS the diode
             if di_info["partnumber"] != sw_info["partnumber"]:
                 print(f"[WARNING] Part numbers differ: switch='{sw_info['partnumber']}' "
                       f"diode='{di_info['partnumber']}'. Continuing anyway.")
         except Exception as e:
-            print(f"[WARNING] Diode XML parse failed ({e}). Diode data will be empty.")
+            print(f"[WARNING] Diode XML parse failed ({e}). Using only combined-file diode data (if any).")
     elif di_path:
-        print(f"[WARNING] Diode XML file not found: '{di_path}'. Diode data will be empty.")
+        print(f"[WARNING] Diode XML file not found: '{di_path}'. Using only combined-file diode data (if any).")
 
     # --- Map PLECS class to our type string ---
-    type_map = {"IGBT": "IGBT", "MOSFET": "SiC-MOSFET"}
-    t_type = type_map.get(sw_info["class"], "IGBT")
+    if sw_info["is_igbt"]:
+        t_type = "IGBT"
+    elif sw_info["is_mosfet"]:
+        t_type = "SiC-MOSFET"
+    else:
+        t_type = "IGBT"
 
     name = sw_info["partnumber"]
     manufacturer = sw_info["vendor"]
@@ -2233,7 +2287,7 @@ def import_plecs_xml() -> bool:
         "datasheet_date": "",
         "datasheet_hyperlink": f"https://www.plexim.com/xml/semiconductors/{name}",
         "comment": "Imported from PLECS XML. v_abs_max, i_abs_max and other absolute ratings "
-                   "are not present in PLECS XML – fill them using the 'edit' command.",
+                   "are not present in PLECS XML - fill them using the 'edit' command.",
         "v_abs_max": "",
         "i_abs_max": max((max(ch["graph_v_i"][1]) for ch in sw_ch if ch.get("graph_v_i")),
                          default=""),
@@ -2280,6 +2334,38 @@ def import_plecs_xml() -> bool:
         "graph_v_ecoss": [],
         "raw_measurement_data": ""
     }
+    return transistor_json
+
+
+def import_plecs_xml() -> bool:
+    """
+    Import a PLECS-format XML file (switch-only, combined switch+diode, or a
+    switch+separate-diode pair) and save as a transistor JSON file in the
+    appropriate category folder.
+
+    The actual parsing / JSON-building is delegated to
+    build_transistor_json_from_plecs() so the GUI can reuse the exact same
+    logic. This function only handles the CLI-specific input() prompts and
+    file writing.
+
+    :return: True if a JSON file was written successfully, False otherwise.
+    """
+    print("\n--- Import PLECS XML files ---")
+    sw_path = input("Path to switch (or combined) XML file: ").strip().strip("'\"")
+    di_path = input("Path to separate diode XML file (Enter to skip): ").strip().strip("'\"")
+
+    try:
+        transistor_json = build_transistor_json_from_plecs(sw_path, di_path)
+    except Exception as e:
+        print(f"[ERROR] Failed to parse switch XML: {e}")
+        return False
+
+    name   = transistor_json["name"]
+    t_type = transistor_json["type"]
+    sw_ch   = transistor_json["switch"]["channel"]
+    sw_eon  = transistor_json["switch"]["e_on"]
+    sw_eoff = transistor_json["switch"]["e_off"]
+    di_ch   = transistor_json["diode"]["channel"]
 
     # --- Determine save location ---
     tech_folders = {'IGBT': 'IGBT', 'SiC-MOSFET': 'SiC-MOSFET',
@@ -2307,12 +2393,11 @@ def import_plecs_xml() -> bool:
         print(f"  switch.e_on entries    : {len(sw_eon)}")
         print(f"  switch.e_off entries   : {len(sw_eoff)}")
         print(f"  diode.channel entries  : {len(di_ch)}")
-        print(f"  [NOTE] v_abs_max and other ratings are blank – use 'edit' to fill them.")
+        print(f"  [NOTE] v_abs_max and other ratings are blank - use 'edit' to fill them.")
         return True
     except Exception as e:
         print(f"[ERROR] Failed to save JSON: {e}")
         return False
-
 
 # ---------------------------------------------------------------------------
 # CONVERTER CLI
